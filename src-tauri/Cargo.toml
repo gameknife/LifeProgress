@@ -1,0 +1,28 @@
+[package]
+name = "life-progress"
+version = "0.1.0"
+description = "A minimal desktop life calendar with 4,680 weeks"
+edition = "2021"
+
+[lib]
+# Keep the library name distinct from the Windows executable.
+name = "life_progress_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-global-shortcut = "2"
+chrono = "0.4.44"
+tauri-plugin-single-instance = "2"
+tempfile = "3"
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

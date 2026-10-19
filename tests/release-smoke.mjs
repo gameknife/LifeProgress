@@ -1,0 +1,21 @@
+// Read-only data smoke test for a release app temporarily launched with CDP port 9229.
+import { chromium, expect } from '@playwright/test';
+import assert from 'node:assert/strict';
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9229');
+const page = browser.contexts().flatMap(context => context.pages()).find(page => page.url().includes('tauri.localhost'));
+assert.ok(page, 'Packaged frontend should load from the Tauri protocol');
+await page.waitForFunction(() => document.querySelector('#preview-wake'));
+const snapshot = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('load_data'));
+assert.equal(snapshot.interactive, false);
+assert.equal(snapshot.loadError, null);
+assert.equal(snapshot.warning, null);
+assert.ok(!snapshot.dataPath.replaceAll('\\', '/').includes('/.qa/'), 'Release must use the real app data directory');
+await expect(page.locator('#notice')).not.toBeVisible();
+await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('set_mode', { interactive: true }));
+await expect(page.locator('body')).toHaveClass(/interactive/);
+if (!snapshot.data.birthDate) await expect(page.locator('#settings')).toBeVisible();
+await page.screenshot({ path: '.qa/release-first-run.png' });
+await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('set_mode', { interactive: false }));
+await expect(page.locator('body')).not.toHaveClass(/interactive/);
+console.log('Release smoke passed: bundled frontend, Rust IPC, app data path, shortcut registration, first-run UI and silent mode.');
+await browser.close();
