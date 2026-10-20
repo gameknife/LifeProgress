@@ -1,29 +1,20 @@
 export const WEEKS_PER_YEAR = 52;
 export const YEARS = 90;
 export const TOTAL_WEEKS = WEEKS_PER_YEAR * YEARS;
-export type Orientation = "horizontal" | "vertical";
-export type DisplayScale = "small" | "medium" | "large";
 const DAY = 86_400_000;
 
 export interface Milestone {
   title: string;
   details: string;
-  kind: "milestone" | "wish";
   color: string;
 }
 export interface AppData {
-  version: 1;
+  version: 2;
   birthDate: string | null;
-  targetAge: 90;
-  breathing: boolean;
-  orientation: Orientation;
-  centered: boolean;
-  displayScale: DisplayScale;
   milestones: Record<string, Milestone>;
-  position: { x: number; y: number } | null;
 }
 export function emptyData(): AppData {
-  return { version: 1, birthDate: null, targetAge: 90, breathing: true, orientation: "horizontal", centered: true, displayScale: "medium", milestones: {}, position: null };
+  return { version: 2, birthDate: null, milestones: {} };
 }
 
 export function parseBirthDate(value: string): Date {
@@ -72,7 +63,4 @@ export function weekDates(index: number, birthDate: string | null): string {
   const from = new Date(start + Math.ceil(col * days / WEEKS_PER_YEAR) * DAY);
   const to = new Date(start + (Math.ceil((col + 1) * days / WEEKS_PER_YEAR) - 1) * DAY);
   return `${from.toISOString().slice(0, 10)} — ${to.toISOString().slice(0, 10)}`;
-}
-export function weekStatus(index: number, current: number | null, elapsed: number): string {
-  return index === current ? "本周" : index < elapsed ? "已经走过" : "尚未到来";
 }

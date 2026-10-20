@@ -1,11 +1,11 @@
 mod data;
-use data::{AppData, DisplayScale, Orientation, Position};
+use data::AppData;
 use serde::Serialize;
 use std::{path::PathBuf, sync::Mutex};
 use tauri::{
     menu::MenuBuilder,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WindowEvent,
+    AppHandle, Emitter, Manager, State, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -40,20 +40,10 @@ fn load_data(state: State<AppState>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
-fn save_data(app: AppHandle, state: State<AppState>, mut data: AppData) -> Result<AppData, String> {
+fn save_data(state: State<AppState>, data: AppData) -> Result<AppData, String> {
     let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
     if runtime.load_error.is_some() {
         return Err("原数据无法读取，请先使用恢复按钮；不会覆盖原文件。".into());
-    }
-    data::validate(&data)?;
-    let resize = data.orientation != runtime.data.orientation
-        || data.display_scale != runtime.data.display_scale;
-    if resize || data.centered {
-        place_window(&app, &data, resize)?;
-    }
-    if let Some(window) = app.get_webview_window("main") {
-        let p = window.outer_position().map_err(|e| e.to_string())?;
-        data.position = Some(Position { x: p.x, y: p.y });
     }
     data::write_data(&state.path, &data)?;
     runtime.data = data.clone();
@@ -88,9 +78,6 @@ fn set_mode(app: AppHandle, interactive: bool) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("找不到主窗口")?;
     let state = app.state::<AppState>();
     let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
-    if !interactive && runtime.data.centered {
-        place_window(&app, &runtime.data, false)?;
-    }
     let transition = (|| -> tauri::Result<()> {
         if interactive {
             window.set_always_on_bottom(false)?;
@@ -161,78 +148,6 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
-fn place_window(app: &AppHandle, data: &AppData, resize: bool) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or("找不到主窗口")?;
-    let monitors = window.available_monitors().map_err(|e| e.to_string())?;
-    let saved = data.position.as_ref().filter(|_| !data.centered);
-    let saved_monitor = saved
-        .and_then(|p| {
-            monitors.iter().find(|m| {
-                let area = m.work_area();
-                p.x >= area.position.x
-                    && p.x < area.position.x + area.size.width as i32
-                    && p.y >= area.position.y
-                    && p.y < area.position.y + area.size.height as i32
-            })
-        })
-        .cloned();
-    if let Some(monitor) = saved_monitor
-        .or(window.current_monitor().map_err(|e| e.to_string())?)
-        .or(window.primary_monitor().map_err(|e| e.to_string())?)
-    {
-        let area = monitor.work_area();
-        if resize {
-            let size = display_size(
-                data.orientation,
-                data.display_scale,
-                monitor.scale_factor(),
-                area.size,
-            );
-            window.set_size(size).map_err(|e| e.to_string())?;
-        }
-        // Position with actual outer bounds; set_size takes client bounds and must
-        // never run during a mode-only transition.
-        let current_size = window.outer_size().map_err(|e| e.to_string())?;
-        let width = current_size.width.min(area.size.width);
-        let height = current_size.height.min(area.size.height);
-        let right = area.position.x + area.size.width as i32 - width as i32;
-        let bottom = area.position.y + area.size.height as i32 - height as i32;
-        let x = saved
-            .map(|p| p.x)
-            .unwrap_or(area.position.x + (area.size.width as i32 - width as i32) / 2)
-            .clamp(area.position.x, right);
-        let y = saved
-            .map(|p| p.y)
-            .unwrap_or(area.position.y + (area.size.height as i32 - height as i32) / 2)
-            .clamp(area.position.y, bottom);
-        window
-            .set_position(PhysicalPosition::new(x, y))
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-fn display_size(
-    orientation: Orientation,
-    display_scale: DisplayScale,
-    dpi: f64,
-    area: PhysicalSize<u32>,
-) -> PhysicalSize<u32> {
-    let (base_width, base_height) = match orientation {
-        Orientation::Horizontal => (920.0 * dpi, 640.0 * dpi),
-        Orientation::Vertical => (520.0 * dpi, 920.0 * dpi),
-    };
-    // Fit the largest preset first so all three remain distinct on small screens.
-    let fit = ((area.width.saturating_sub(48).max(1) as f64) / (base_width * 1.5))
-        .min((area.height.saturating_sub(48).max(1) as f64) / (base_height * 1.5))
-        .min(1.0);
-    PhysicalSize::new(
-        (base_width * fit * display_scale.factor()).round() as u32,
-        (base_height * fit * display_scale.factor()).round() as u32,
-    )
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -261,7 +176,6 @@ pub fn run() {
                 Ok(data) => (data, None),
                 Err(error) => (AppData::default(), Some(error)),
             };
-            place_window(app.handle(), &data, true)?;
             app.manage(AppState {
                 path,
                 runtime: Mutex::new(Runtime {
@@ -271,33 +185,9 @@ pub fn run() {
                     interactive: false,
                 }),
             });
-            let menu = MenuBuilder::new(app)
-                .text("edit", "编辑 / 返回静默  Ctrl+Alt+L")
-                .text("reset", "窗口居中")
-                .text("quit", "保存并退出")
-                .build()?;
-            // Paint each dot directly into the 32×32 tray icon.
-            let mut rgba = vec![0u8; 32 * 32 * 4];
-            for row in 0..4 {
-                for col in 0..4 {
-                    for dy in -2i32..=2 {
-                        for dx in -2i32..=2 {
-                            if dx * dx + dy * dy <= 4 {
-                                let x = 5 + col * 7 + dx;
-                                let y = 5 + row * 7 + dy;
-                                let i = ((y * 32 + x) * 4) as usize;
-                                rgba[i..i + 4].copy_from_slice(if row == 2 && col == 1 {
-                                    &[239, 68, 68, 255]
-                                } else {
-                                    &[229, 229, 229, 255]
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+            let menu = MenuBuilder::new(app).text("quit", "保存并退出").build()?;
             TrayIconBuilder::with_id("life-progress")
-                .icon(tauri::image::Image::new_owned(rgba, 32, 32))
+                .icon(app.default_window_icon().ok_or("缺少应用图标")?.clone())
                 .tooltip("Life Progress · Ctrl+Alt+L 编辑")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -313,19 +203,10 @@ pub fn run() {
                         toggle(tray.app_handle());
                     }
                 })
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "edit" => toggle(app),
-                    "reset" => {
-                        let data = AppData {
-                            centered: true,
-                            ..app.state::<AppState>().runtime.lock().unwrap().data.clone()
-                        };
-                        if let Err(error) = place_window(app, &data, false) {
-                            eprintln!("{error}");
-                        }
+                .on_menu_event(|app, event| {
+                    if event.id.as_ref() == "quit" {
+                        request_finish(app, true);
                     }
-                    "quit" => request_finish(app, true),
-                    _ => {}
                 })
                 .build(app)?;
             if let Err(error) = app

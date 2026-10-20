@@ -1,51 +1,34 @@
 import "./styles.css";
-import { drawCalendar, hitTest, pointAt, type Layout } from "./calendar";
-import { emptyData, getProgress, localToday, validateBirthday, weekDates, weekDescription, weekStatus, TOTAL_WEEKS, WEEKS_PER_YEAR, type AppData, type Milestone } from "./model";
-import { native, loadSnapshot, saveData, recoverData, changeMode, beginDrag, quitApp, subscribe } from "./bridge";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { drawCalendar, hitTest, type Layout } from "./calendar";
+import { emptyData, getProgress, localToday, validateBirthday, weekDates, weekDescription, TOTAL_WEEKS, WEEKS_PER_YEAR, type AppData } from "./model";
 
 function element<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`Missing element: ${id}`);
   return node as T;
 }
+interface Snapshot {
+  data: AppData; interactive: boolean; loadError: string | null; warning: string | null;
+}
 const canvas = element<HTMLCanvasElement>("weeks");
 const editor = element<HTMLDialogElement>("editor");
-const settings = element<HTMLDialogElement>("settings");
 const titleInput = element<HTMLInputElement>("mark-title");
 const detailsInput = element<HTMLTextAreaElement>("mark-details");
-const kindInput = element<HTMLSelectElement>("mark-kind");
 const colorInput = element<HTMLInputElement>("mark-color");
 const birthInput = element<HTMLInputElement>("birth-date");
-const breathingInput = element<HTMLInputElement>("breathing");
-const orientationInput = element<HTMLSelectElement>("orientation");
-const centeredInput = element<HTMLInputElement>("centered");
-const displayScaleInput = element<HTMLSelectElement>("display-scale");
-const tooltip = element<HTMLDivElement>("tooltip");
-const glow = element<HTMLDivElement>("current-glow");
-let data: AppData = emptyData();
+let data = emptyData();
 let interactive = false;
 let selected: number | null = null;
+let keyboardWeek = 0;
 let layout: Layout;
 let busy = false;
 let ready = false;
 let loadError: string | null = null;
 let warning: string | null = null;
-let toastTimer: ReturnType<typeof setTimeout>;
-let keyboardWeek = 0;
+let error: string | null = null;
 
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function toast(message: string): void {
-  const node = element("toast");
-  node.textContent = message; node.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, 4000);
-}
-function updateNotice(): void {
-  const notice = element("notice");
-  notice.hidden = !interactive || (!loadError && !warning);
-  element("notice-text").textContent = loadError ? `数据未载入：${loadError}。恢复会保留损坏原件；有备份则恢复，否则重新设置。` : warning;
-  element("recover-button").hidden = !loadError;
-}
 function render(): void {
   layout = drawCalendar(canvas, data, interactive, selected);
   const progress = getProgress(data.birthDate);
@@ -54,84 +37,52 @@ function render(): void {
   element("life-caption").textContent = !data.birthDate ? "Ctrl+Alt+L · 设置出生日期" :
     progress.current === null ? "90 年 · 每一周都曾属于你" : `${weekDescription(progress.current)} · ${interactive ? "编辑中" : "Ctrl+Alt+L 编辑"}`;
   element("mark-count").textContent = `${Object.keys(data.milestones).length} 个标记`;
-  const dimensions = data.orientation === "horizontal" ? "52 行、90 列" : "90 行、52 列";
   canvas.setAttribute("aria-label", data.birthDate ?
-    `${dimensions}的人生周历，已走过 ${progress.elapsed} 周，剩余 ${progress.remaining} 周。` :
-    `${dimensions}的人生周历。先通过设置输入出生日期。`);
-  glow.hidden = progress.current === null || !data.breathing;
-  if (progress.current !== null) {
-    const p = pointAt(progress.current, layout);
-    glow.style.left = `${p.x}px`; glow.style.top = `${p.y}px`;
-    glow.style.width = glow.style.height = `${layout.radius * 2}px`;
-  }
-  if (editor.open) positionEditor();
-}
-function openSettings(): void {
-  tooltip.hidden = true;
-  element("toast").hidden = true;
-  birthInput.value = data.birthDate ?? "";
+    `52 行、90 列的人生周历，已走过 ${progress.elapsed} 周，剩余 ${progress.remaining} 周。` :
+    "52 行、90 列的人生周历。先输入出生日期。");
+  const message = error || (loadError ? `数据未载入：${loadError}。恢复会保留损坏原件；有备份则恢复，否则重新设置。` : warning);
+  const notice = element("notice");
+  element(editor.open ? "milestone-form" : "app").append(notice);
+  notice.hidden = !interactive || !message;
+  element("notice-text").textContent = message;
+  element("recover-button").hidden = !loadError;
+  if (message && editor.open) notice.scrollIntoView({ block: "nearest" });
   birthInput.max = localToday().toISOString().slice(0, 10);
-  breathingInput.checked = data.breathing;
-  orientationInput.value = data.orientation;
-  centeredInput.checked = data.centered;
-  displayScaleInput.value = data.displayScale;
-  element("settings-error").hidden = true;
-  if (!settings.open) settings.showModal();
-  birthInput.focus();
 }
+function closeEditor(): void { editor.close(); selected = null; canvas.title = ""; }
 function showMode(value: boolean): void {
   interactive = value;
   document.body.classList.toggle("interactive", value);
   canvas.tabIndex = value ? 0 : -1;
-  tooltip.hidden = true;
-  if (!value) {
-    editor.close(); settings.close(); selected = null;
-    element("toast").hidden = true;
-    clearTimeout(toastTimer);
-  }
-  updateNotice(); render();
-  if (value && ready && !data.birthDate && !loadError) openSettings();
-  element("preview-wake").hidden = native || value;
-}
-async function persist(next: AppData): Promise<void> {
-  if (loadError) throw new Error("请先恢复数据，原文件不会被覆盖。");
-  data = await saveData(next);
+  canvas.title = "";
+  if (!value) closeEditor();
+  render();
+  if (value && !data.birthDate) birthInput.focus();
 }
 function draft(requireTitle = false): AppData {
-  if (!editor.open || selected === null) return data;
-  const title = titleInput.value.trim();
-  const details = detailsInput.value;
+  const birthDate = birthInput.value || null;
+  if (birthDate || data.birthDate) validateBirthday(birthDate ?? "");
+  const next = { ...data, birthDate };
+  if (!editor.open || selected === null) return next;
+  const title = titleInput.value.trim(), details = detailsInput.value;
   if (!title) {
-    if (!requireTitle && !details.trim() && !data.milestones[selected]) return data;
+    if (!requireTitle && !details.trim() && !data.milestones[selected]) return next;
     throw new Error("请填写标题；移除已有记录请使用「删除标记」。");
   }
-  const mark: Milestone = { title, details, kind: kindInput.value as Milestone["kind"], color: colorInput.value };
-  return { ...data, milestones: { ...data.milestones, [selected]: mark } };
+  return { ...next, milestones: { ...data.milestones, [selected]: { title, details, color: colorInput.value } } };
 }
-async function saveDraft(requireTitle = false): Promise<void> {
-  const next = draft(requireTitle);
-  if (next !== data) await persist(next);
-}
-function closeEditor(): void { editor.close(); selected = null; tooltip.hidden = true; }
-function settingsDraft(): AppData {
-  const birthDate = birthInput.value;
-  validateBirthday(birthDate);
-  return { ...data, birthDate, breathing: breathingInput.checked, centered: centeredInput.checked,
-    orientation: orientationInput.value as AppData["orientation"], displayScale: displayScaleInput.value as AppData["displayScale"] };
+async function persist(next = draft()): Promise<void> {
+  if (loadError) throw new Error("请先恢复数据，原文件不会被覆盖。");
+  data = await invoke<AppData>("save_data", { data: next });
 }
 async function action(task: () => void | Promise<void>): Promise<void> {
   if (busy || !ready) return;
-  busy = true;
+  busy = true; error = null;
   const buttons = document.querySelectorAll<HTMLButtonElement>("button");
   buttons.forEach(button => { button.disabled = true; });
   try { await task(); }
-  catch (error) {
-    const dialog = settings.open ? settings : editor.open ? editor : null;
-    if (dialog) {
-      const node = element(`${dialog.id}-error`);
-      node.textContent = errorMessage(error); node.hidden = false;
-    } else toast(errorMessage(error));
-  } finally {
+  catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+  finally {
     busy = false;
     buttons.forEach(button => { button.disabled = false; });
     render();
@@ -142,93 +93,45 @@ function onAction(id: string, event: string, task: () => void | Promise<void>): 
 }
 async function finishEditing(quit = false): Promise<void> {
   await action(async () => {
-    const next = settings.open && (birthInput.value || data.birthDate) ? settingsDraft() : draft();
-    // A single write saves the draft and latest dragged window position.
-    if (!loadError || next !== data) await persist(next);
-    await changeMode(false);
-    showMode(false);
-    if (quit) await quitApp();
+    if (!loadError || birthInput.value || editor.open) await persist();
+    await invoke("set_mode", { interactive: false });
+    if (quit) await invoke("quit_app");
   });
 }
-function setColor(color: string): void {
-  colorInput.value = color;
-  document.querySelectorAll<HTMLButtonElement>(".swatch").forEach(button => {
-    button.setAttribute("aria-pressed", String(button.dataset.color?.toLowerCase() === color.toLowerCase()));
-  });
-}
-function positionEditor(): void {
-  if (selected === null) return;
-  const p = pointAt(selected, layout);
-  const rect = canvas.getBoundingClientRect();
-  const w = editor.offsetWidth, h = editor.offsetHeight;
-  const x = rect.left + p.x, y = rect.top + p.y;
-  const left = x + w + 16 <= window.innerWidth ? x + 12 : x - w - 12;
-  const top = y + h + 16 <= window.innerHeight ? y + 12 : y - h - 12;
-  editor.style.left = `${Math.max(12, Math.min(left, window.innerWidth - w - 12))}px`;
-  editor.style.top = `${Math.max(12, Math.min(top, window.innerHeight - h - 12))}px`;
-}
-function openWeek(index: number): void {
-  if (!data.birthDate) { openSettings(); return; }
-  element("toast").hidden = true;
+async function openWeek(index: number): Promise<void> {
+  if (editor.open || birthInput.value !== (data.birthDate ?? "")) await persist();
+  if (!data.birthDate) { birthInput.focus(); return; }
   selected = index; keyboardWeek = index;
   const mark = data.milestones[index];
-  const progress = getProgress(data.birthDate);
   element("editor-heading").textContent = weekDescription(index);
   element("editor-date").textContent = weekDates(index, data.birthDate);
   titleInput.value = mark?.title ?? "";
   detailsInput.value = mark?.details ?? "";
-  kindInput.value = mark?.kind ?? (index <= (progress.current ?? progress.elapsed) ? "milestone" : "wish");
-  setColor(mark?.color ?? "#FACC15");
+  colorInput.value = mark?.color ?? "#FACC15";
   element("delete-mark").hidden = !mark;
-  element("editor-error").hidden = true;
-  tooltip.hidden = true;
+  canvas.title = "";
   if (!editor.open) editor.show();
   titleInput.focus();
 }
-
-const palette: [string, string][] = [
-  ["#FACC15", "琥珀金"], ["#38BDF8", "天际蓝"], ["#A855F7", "罗兰紫"],
-  ["#34D399", "薄荷绿"], ["#FB7185", "玫瑰粉"], ["#E5E5E5", "亮白"],
-];
-for (const [color, label] of palette) {
-  const button = document.createElement("button");
-  button.type = "button"; button.className = "swatch"; button.dataset.color = color;
-  button.style.setProperty("--swatch", color);
-  button.setAttribute("aria-label", label); button.setAttribute("aria-pressed", "false");
-  button.addEventListener("click", () => setColor(color));
-  element("swatches").append(button);
-}
-colorInput.addEventListener("input", () => setColor(colorInput.value));
-element("preview-wake").addEventListener("click", () => showMode(true));
-
 function pointerWeek(event: MouseEvent): number | null {
   const rect = canvas.getBoundingClientRect();
   return hitTest(event.clientX - rect.left, event.clientY - rect.top, layout);
 }
 
 canvas.addEventListener("pointermove", event => {
-  if (!interactive || editor.open || settings.open || !ready) { tooltip.hidden = true; return; }
+  if (!interactive || editor.open || !ready) return;
   const index = pointerWeek(event);
-  if (index === null) { tooltip.hidden = true; return; }
-  const progress = getProgress(data.birthDate);
-  const mark = data.milestones[index];
-  tooltip.textContent = `${weekDescription(index)} · ${weekStatus(index, progress.current, progress.elapsed)}\n${weekDates(index, data.birthDate)}${mark ? "\n" + mark.title : ""}`;
-  tooltip.hidden = false;
-  tooltip.style.left = `${Math.max(8, Math.min(event.clientX + 12, window.innerWidth - tooltip.offsetWidth - 8))}px`;
-  tooltip.style.top = `${Math.max(8, Math.min(event.clientY + 12, window.innerHeight - tooltip.offsetHeight - 8))}px`;
+  canvas.title = index === null ? "" : `${weekDescription(index)}\n${weekDates(index, data.birthDate)}\n${data.milestones[index]?.title ?? ""}`;
 });
-canvas.addEventListener("pointerleave", () => { tooltip.hidden = true; });
 canvas.addEventListener("click", event => {
-  if (!interactive || settings.open) return;
+  if (!interactive || !ready) return;
   const index = pointerWeek(event);
   if (index === null) { if (editor.open) void finishEditing(); return; }
-  void action(async () => { await saveDraft(); openWeek(index); });
+  void action(() => openWeek(index));
 });
 canvas.addEventListener("keydown", event => {
-  if (!interactive || editor.open || settings.open) return;
-  const horizontal = data.orientation === "horizontal";
-  const x = horizontal ? WEEKS_PER_YEAR : 1, y = horizontal ? 1 : WEEKS_PER_YEAR;
-  const steps: Record<string, number> = { ArrowLeft: -x, ArrowRight: x, ArrowUp: -y, ArrowDown: y };
+  if (!interactive || editor.open) return;
+  const steps: Record<string, number> = { ArrowLeft: -WEEKS_PER_YEAR, ArrowRight: WEEKS_PER_YEAR, ArrowUp: -1, ArrowDown: 1 };
   if (event.key in steps) {
     event.preventDefault();
     keyboardWeek = Math.max(0, Math.min(TOTAL_WEEKS - 1, keyboardWeek + steps[event.key]));
@@ -237,62 +140,39 @@ canvas.addEventListener("keydown", event => {
     event.preventDefault(); void action(() => openWeek(keyboardWeek));
   }
 });
-onAction("milestone-form", "submit", async () => {
-  await saveDraft(true); closeEditor(); toast("已保存标记");
-});
-onAction("close-editor", "click", async () => { await saveDraft(); closeEditor(); });
+onAction("birth-date", "change", () => persist());
+onAction("milestone-form", "submit", async () => { await persist(draft(true)); closeEditor(); });
+onAction("close-editor", "click", async () => { await persist(); closeEditor(); });
 onAction("delete-mark", "click", async () => {
   if (selected === null) return;
   const milestones = { ...data.milestones }; delete milestones[selected];
-  await persist({ ...data, milestones }); closeEditor(); toast("已删除标记");
+  await persist({ ...data, milestones }); closeEditor();
 });
-onAction("settings-button", "click", async () => {
-  await saveDraft(); closeEditor(); openSettings();
-});
-onAction("settings-form", "submit", async () => {
-  await persist(settingsDraft()); settings.close(); toast("已保存设置");
-});
-element("close-settings").addEventListener("click", () => { settings.close(); });
-element("done-button").addEventListener("click", () => { void finishEditing(); });
 onAction("recover-button", "click", async () => {
-  data = await recoverData(); loadError = null;
-  updateNotice(); toast("已恢复可用数据，损坏原件已保留");
-  if (!data.birthDate) openSettings();
+  data = await invoke<AppData>("recover_data"); loadError = null;
+  birthInput.value = data.birthDate ?? "";
+  if (!data.birthDate) birthInput.focus();
 });
+element("done-button").addEventListener("click", () => { void finishEditing(); });
 element("drag-handle").addEventListener("pointerdown", event => {
-  if (interactive && event.button === 0 && !(event.target as HTMLElement).closest("button")) {
-    void beginDrag().catch(error => toast(errorMessage(error)));
+  if (interactive && event.button === 0 && !(event.target as HTMLElement).closest("button, input, label")) {
+    void action(() => invoke("begin_drag"));
   }
 });
 document.addEventListener("pointerdown", event => {
-  if (!interactive || settings.open || !editor.open || !ready) return;
+  if (!interactive || !editor.open || !ready) return;
   const target = event.target as HTMLElement;
   if (!editor.contains(target) && !target.closest("canvas, button, header")) void finishEditing();
 });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && interactive) { event.preventDefault(); void finishEditing(); }
-  if (!native && event.ctrlKey && event.altKey && event.key.toLowerCase() === "l") {
-    event.preventDefault(); if (interactive) void finishEditing(); else showMode(true);
-  }
 });
-for (const dialog of [settings, editor]) dialog.addEventListener("cancel", event => {
-  event.preventDefault(); void finishEditing();
-});
-settings.addEventListener("click", event => {
-  if (event.target !== settings) return;
-  const rect = settings.getBoundingClientRect();
-  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
-    void finishEditing();
-  }
-});
-document.addEventListener("visibilitychange", () => {
-  document.body.classList.toggle("page-hidden", document.hidden);
-  if (!document.hidden) render();
-});
-new ResizeObserver(() => render()).observe(canvas);
+editor.addEventListener("cancel", event => { event.preventDefault(); void finishEditing(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
+new ResizeObserver(render).observe(canvas);
 function watchDpr(): void {
-  const query = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-  query.addEventListener("change", () => { render(); watchDpr(); }, { once: true });
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+    .addEventListener("change", () => { render(); watchDpr(); }, { once: true });
 }
 watchDpr();
 function scheduleDateRefresh(): void {
@@ -302,12 +182,11 @@ function scheduleDateRefresh(): void {
 }
 scheduleDateRefresh();
 async function boot(): Promise<void> {
-  await subscribe(showMode, quit => { void finishEditing(quit); });
-  const snapshot = await loadSnapshot();
+  await listen<boolean>("mode-changed", event => showMode(event.payload));
+  await listen<boolean>("finish-editing", event => { void finishEditing(event.payload); });
+  const snapshot = await invoke<Snapshot>("load_data");
   data = snapshot.data; loadError = snapshot.loadError; warning = snapshot.warning;
-  element("data-path").textContent = snapshot.dataPath;
+  birthInput.value = data.birthDate ?? "";
   ready = true; showMode(snapshot.interactive);
 }
-void boot().catch(error => {
-  ready = true; loadError = errorMessage(error); showMode(true);
-});
+void boot().catch(cause => { ready = true; loadError = String(cause); showMode(true); });

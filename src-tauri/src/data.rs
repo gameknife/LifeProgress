@@ -4,89 +4,35 @@ use std::{collections::BTreeMap, fs, io::Write, path::Path};
 
 pub const TOTAL_WEEKS: u32 = 4680;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Orientation {
-    #[default]
-    Horizontal,
-    Vertical,
-}
-
-fn default_centered() -> bool {
-    true
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DisplayScale {
-    Small,
-    #[default]
-    Medium,
-    Large,
-}
-
-impl DisplayScale {
-    pub fn factor(self) -> f64 {
-        match self {
-            Self::Small => 1.0,
-            Self::Medium => 1.25,
-            Self::Large => 1.5,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Milestone {
     pub title: String,
     pub details: String,
-    pub kind: String,
     pub color: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Position {
-    pub x: i32,
-    pub y: i32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AppData {
     pub version: u32,
     pub birth_date: Option<String>,
-    pub target_age: u32,
-    pub breathing: bool,
-    #[serde(default)]
-    pub orientation: Orientation,
-    #[serde(default = "default_centered")]
-    pub centered: bool,
-    #[serde(default)]
-    pub display_scale: DisplayScale,
     pub milestones: BTreeMap<u32, Milestone>,
-    pub position: Option<Position>,
 }
 
 impl Default for AppData {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             birth_date: None,
-            target_age: 90,
-            breathing: true,
-            orientation: Orientation::Horizontal,
-            centered: true,
-            display_scale: DisplayScale::Medium,
             milestones: BTreeMap::new(),
-            position: None,
         }
     }
 }
 
 pub fn validate(data: &AppData) -> Result<(), String> {
-    if data.version != 1 || data.target_age != 90 {
-        return Err("不支持的数据版本或目标年龄；当前版本固定为 90 岁。".into());
+    if data.version != 2 {
+        return Err("不支持的数据版本。".into());
     }
     if let Some(value) = &data.birth_date {
         let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
@@ -103,7 +49,6 @@ pub fn validate(data: &AppData) -> Result<(), String> {
             || mark.title.trim().is_empty()
             || mark.title.chars().count() > 120
             || mark.details.chars().count() > 4000
-            || !matches!(mark.kind.as_str(), "milestone" | "wish")
             || mark.color.len() != 7
             || !mark.color.starts_with('#')
             || !mark.color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
@@ -121,8 +66,12 @@ pub fn read_data(path: &Path) -> Result<AppData, String> {
     if fs::metadata(path).map_err(|e| e.to_string())?.len() > 2_000_000 {
         return Err("数据文件超过 2MB，请检查文件。".into());
     }
-    let data = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+    let mut data: AppData = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("无法读取人生周历：{e}"))?;
+    // Retired v1 settings and milestone kinds are ignored by serde; keep all user content.
+    if data.version == 1 {
+        data.version = 2;
+    }
     validate(&data)?;
     Ok(data)
 }
@@ -150,24 +99,26 @@ pub fn write_data(path: &Path, data: &AppData) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
-    fn legacy_data_defaults_to_horizontal_and_centered() {
-        let data: AppData = serde_json::from_str(r#"{"version":1,"birthDate":null,"targetAge":90,"breathing":true,"milestones":{},"position":{"x":10,"y":20}}"#).unwrap();
-        assert_eq!(data.orientation, Orientation::Horizontal);
-        assert!(data.centered);
-        assert_eq!(data.display_scale, DisplayScale::Medium);
-        let restored: AppData = serde_json::from_str(
-            &serde_json::to_string(&AppData {
-                orientation: Orientation::Vertical,
-                centered: false,
-                display_scale: DisplayScale::Large,
-                ..data
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(restored.orientation, Orientation::Vertical);
-        assert!(!restored.centered);
-        assert_eq!(restored.display_scale, DisplayScale::Large);
+    fn legacy_data_preserves_content_and_is_backed_up_before_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("milestones.json");
+        let legacy = r##"{"version":1,"birthDate":"1995-05-18","targetAge":90,"breathing":true,"orientation":"vertical","displayScale":"large","centered":false,"position":{"x":10,"y":20},"milestones":{"4679":{"title":"最后一周","details":"中文、换行\n与符号","kind":"wish","color":"#38BDF8"}}}"##;
+        fs::write(&path, legacy).unwrap();
+        let data = read_data(&path).unwrap();
+        assert_eq!(data.version, 2);
+        assert_eq!(data.birth_date.as_deref(), Some("1995-05-18"));
+        assert_eq!(data.milestones[&4679].title, "最后一周");
+        assert_eq!(data.milestones[&4679].details, "中文、换行\n与符号");
+        assert_eq!(data.milestones[&4679].color, "#38BDF8");
+        assert_eq!(fs::read_to_string(&path).unwrap(), legacy);
+        write_data(&path, &data).unwrap();
+        assert_eq!(
+            fs::read_to_string(path.with_extension("json.bak")).unwrap(),
+            legacy
+        );
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.as_object().unwrap().len(), 3);
+        assert_eq!(saved["milestones"]["4679"].as_object().unwrap().len(), 3);
     }
     #[test]
     fn saves_replaces_and_keeps_previous_backup() {
@@ -181,7 +132,6 @@ mod tests {
             Milestone {
                 title: "最后一周".into(),
                 details: "中文、换行\n与符号".into(),
-                kind: "wish".into(),
                 color: "#FACC15".into(),
             },
         );
@@ -212,7 +162,6 @@ mod tests {
             Milestone {
                 title: "超出范围".into(),
                 details: "".into(),
-                kind: "wish".into(),
                 color: "#FACC15".into(),
             },
         );
@@ -225,5 +174,22 @@ mod tests {
         fs::write(&path, b"{broken").unwrap();
         assert!(read_data(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"{broken");
+    }
+    #[test]
+    fn unknown_versions_are_rejected_without_rewriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("milestones.json");
+        let unknown = r#"{"version":3,"birthDate":null,"milestones":{}}"#;
+        fs::write(&path, unknown).unwrap();
+        assert!(read_data(&path).is_err());
+        assert!(write_data(
+            &path,
+            &AppData {
+                version: 3,
+                ..AppData::default()
+            }
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), unknown);
     }
 }

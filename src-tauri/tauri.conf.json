@@ -17,6 +17,7 @@
         "title": "Life Progress",
         "width": 920,
         "height": 640,
+        "center": true,
         "minWidth": 320,
         "minHeight": 320,
         "decorations": false,

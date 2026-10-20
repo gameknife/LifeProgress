@@ -41,14 +41,14 @@ test("hit testing supports edges and rejects canvas margins and gaps", () => {
     assert.equal(hitTest(p.x, p.y, layout), index);
   }
   assert.equal(hitTest(0, 0, layout), null);
-  assert.equal(hitTest(layout.x + 52 * layout.spacing + 1, layout.y + 1, layout), null);
+  assert.equal(hitTest(layout.x + 90 * layout.spacing + 1, layout.y + 1, layout), null);
   const p = pointAt(0, layout);
   assert.equal(hitTest(p.x + layout.spacing * .49, p.y, layout), null);
 });
 
-test("both orientations preserve every week index and center the grid", () => {
-  for (const orientation of ["horizontal", "vertical"] as const) {
-    const layout = calendarLayout(876, 460, orientation);
+test("resizing preserves every week index and centers the fixed horizontal grid", () => {
+  for (const [width, height] of [[876, 460], [320, 320], [1440, 900]]) {
+    const layout = calendarLayout(width, height);
     for (let index = 0; index < TOTAL_WEEKS; index++) {
       const point = pointAt(index, layout);
       assert.equal(hitTest(point.x, point.y, layout), index);
