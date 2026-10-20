@@ -1,5 +1,5 @@
 mod data;
-use data::AppData;
+use data::{AppData, DisplayScale};
 use serde::Serialize;
 use std::{path::PathBuf, sync::Mutex};
 use tauri::{
@@ -136,6 +136,28 @@ fn toggle(app: &AppHandle) {
 }
 
 #[tauri::command]
+fn set_scale(window: tauri::WebviewWindow, scale: DisplayScale) -> tauri::Result<()> {
+    let factor = match scale {
+        DisplayScale::Small => 1.0,
+        DisplayScale::Medium => 1.25,
+        DisplayScale::Large => 1.5,
+    };
+    let dpi = window.scale_factor()?;
+    // Fit the largest preset first so all three stay distinct on smaller screens.
+    let fit = window.current_monitor()?.map_or(1.0, |monitor| {
+        let area = monitor.work_area().size;
+        ((area.width.saturating_sub(48) as f64) / (1380.0 * dpi))
+            .min((area.height.saturating_sub(48) as f64) / (960.0 * dpi))
+            .min(1.0)
+    });
+    window.set_size(tauri::LogicalSize::new(
+        920.0 * fit * factor,
+        640.0 * fit * factor,
+    ))?;
+    window.center()
+}
+
+#[tauri::command]
 fn begin_drag(window: tauri::WebviewWindow, state: State<AppState>) -> Result<(), String> {
     if state.runtime.lock().map_err(|e| e.to_string())?.interactive {
         window.start_dragging().map_err(|e| e.to_string())?;
@@ -161,6 +183,7 @@ pub fn run() {
             save_data,
             recover_data,
             set_mode,
+            set_scale,
             begin_drag,
             quit_app
         ])
@@ -176,6 +199,10 @@ pub fn run() {
                 Ok(data) => (data, None),
                 Err(error) => (AppData::default(), Some(error)),
             };
+            set_scale(
+                app.get_webview_window("main").ok_or("找不到主窗口")?,
+                data.display_scale,
+            )?;
             app.manage(AppState {
                 path,
                 runtime: Mutex::new(Runtime {

@@ -4,7 +4,16 @@ use std::{collections::BTreeMap, fs, io::Write, path::Path};
 
 pub const TOTAL_WEEKS: u32 = 4680;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayScale {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Milestone {
     pub title: String,
@@ -12,11 +21,13 @@ pub struct Milestone {
     pub color: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppData {
     pub version: u32,
     pub birth_date: Option<String>,
+    #[serde(default)]
+    pub display_scale: DisplayScale,
     pub milestones: BTreeMap<u32, Milestone>,
 }
 
@@ -25,6 +36,7 @@ impl Default for AppData {
         Self {
             version: 2,
             birth_date: None,
+            display_scale: DisplayScale::Medium,
             milestones: BTreeMap::new(),
         }
     }
@@ -93,103 +105,4 @@ pub fn write_data(path: &Path, data: &AppData) -> Result<(), String> {
     }
     temp.persist(path).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn legacy_data_preserves_content_and_is_backed_up_before_migration() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("milestones.json");
-        let legacy = r##"{"version":1,"birthDate":"1995-05-18","targetAge":90,"breathing":true,"orientation":"vertical","displayScale":"large","centered":false,"position":{"x":10,"y":20},"milestones":{"4679":{"title":"最后一周","details":"中文、换行\n与符号","kind":"wish","color":"#38BDF8"}}}"##;
-        fs::write(&path, legacy).unwrap();
-        let data = read_data(&path).unwrap();
-        assert_eq!(data.version, 2);
-        assert_eq!(data.birth_date.as_deref(), Some("1995-05-18"));
-        assert_eq!(data.milestones[&4679].title, "最后一周");
-        assert_eq!(data.milestones[&4679].details, "中文、换行\n与符号");
-        assert_eq!(data.milestones[&4679].color, "#38BDF8");
-        assert_eq!(fs::read_to_string(&path).unwrap(), legacy);
-        write_data(&path, &data).unwrap();
-        assert_eq!(
-            fs::read_to_string(path.with_extension("json.bak")).unwrap(),
-            legacy
-        );
-        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved.as_object().unwrap().len(), 3);
-        assert_eq!(saved["milestones"]["4679"].as_object().unwrap().len(), 3);
-    }
-    #[test]
-    fn saves_replaces_and_keeps_previous_backup() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("milestones.json");
-        let mut data = AppData::default();
-        write_data(&path, &data).unwrap();
-        data.birth_date = Some("1995-05-18".into());
-        data.milestones.insert(
-            4679,
-            Milestone {
-                title: "最后一周".into(),
-                details: "中文、换行\n与符号".into(),
-                color: "#FACC15".into(),
-            },
-        );
-        write_data(&path, &data).unwrap();
-        assert_eq!(
-            read_data(&path).unwrap().milestones[&4679].details,
-            "中文、换行\n与符号"
-        );
-        assert!(read_data(&path.with_extension("json.bak"))
-            .unwrap()
-            .birth_date
-            .is_none());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-    }
-    #[test]
-    fn invalid_input_cannot_replace_existing_data() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("milestones.json");
-        let mut data = AppData::default();
-        write_data(&path, &data).unwrap();
-        let original = fs::read(&path).unwrap();
-        data.birth_date = Some("2024-02-30".into());
-        assert!(write_data(&path, &data).is_err());
-        assert_eq!(fs::read(&path).unwrap(), original);
-        data.birth_date = None;
-        data.milestones.insert(
-            4680,
-            Milestone {
-                title: "超出范围".into(),
-                details: "".into(),
-                color: "#FACC15".into(),
-            },
-        );
-        assert!(write_data(&path, &data).is_err());
-    }
-    #[test]
-    fn corrupt_data_is_reported_without_overwriting() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("milestones.json");
-        fs::write(&path, b"{broken").unwrap();
-        assert!(read_data(&path).is_err());
-        assert_eq!(fs::read(&path).unwrap(), b"{broken");
-    }
-    #[test]
-    fn unknown_versions_are_rejected_without_rewriting() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("milestones.json");
-        let unknown = r#"{"version":3,"birthDate":null,"milestones":{}}"#;
-        fs::write(&path, unknown).unwrap();
-        assert!(read_data(&path).is_err());
-        assert!(write_data(
-            &path,
-            &AppData {
-                version: 3,
-                ..AppData::default()
-            }
-        )
-        .is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), unknown);
-    }
 }

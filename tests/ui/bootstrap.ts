@@ -16,6 +16,7 @@ mockIPC(async (command, args) => {
       await emit("mode-changed", interactive);
       return;
     case "begin_drag":
+    case "set_scale":
     case "quit_app":
       return;
     default:

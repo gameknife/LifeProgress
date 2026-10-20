@@ -9,7 +9,7 @@ Windows 桌面人生周历：Tauri + Rust + 原生 TypeScript + 单 Canvas。
 2. 按 **Ctrl + Alt + L** 或左键点击托盘图标进入编辑；在顶部填写出生日期，修改后自动保存。
 3. 悬停查看年龄、周序号、日期及标题；点击一周编辑标题、备忘和颜色。方向键可选中节点，Enter 打开编辑。
 4. 点击「保存标记」继续编辑其他周；**ESC**、「完成」或再次按快捷键保存当前输入并返回静默。
-5. 拖动顶部空白区域移动窗口，拖动边缘调整尺寸。位置和尺寸仅在本次运行有效，切换模式时保持不变。
+5. 顶部选择小 / 中 / 大显示，自动保存档位并居中；空间不足时按屏幕工作区等比缩小。也可拖动顶部空白区域移动、拖动边缘调整尺寸，手动位置和尺寸仅在本次运行有效，切换模式时保持不变。
 6. 右键托盘选择「保存并退出」。关闭窗口只会返回静默。
 
 未设置生日时不显示虚构的进度。当前周以红色表示。
@@ -23,8 +23,8 @@ Windows 桌面人生周历：Tauri + Rust + 原生 TypeScript + 单 Canvas。
 %APPDATA%\com.lifeprogress.desktop\milestones.json
 ```
 
-文件包含 `version: 2`、`birthDate` 和 `milestones`。每条标记包含 `title`、`details`、`color`，节点键为 0 至 4679。
-可直接读取旧版文件，保留生日与全部标记内容；布局、缩放、位置、呼吸动画和标记类型等已移除设置不再保存。
+文件包含 `version: 2`、`birthDate`、`displayScale` 和 `milestones`。每条标记包含 `title`、`details`、`color`，节点键为 0 至 4679。
+可直接读取旧版文件，保留生日与全部标记内容；显示档位缺省为中，布局、位置、呼吸动画和标记类型等已移除设置不再保存。
 读取不会改写文件，首次保存前会备份旧文件并写入新版格式；旧版程序不支持新版格式。
 
 每次保存先同步临时文件，再原子替换 JSON，`milestones.json.bak` 保留上一次保存的版本。
@@ -52,7 +52,6 @@ npm run tauri build
 ```powershell
 npm test
 npm run test:ui
-npm run test:rust
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 

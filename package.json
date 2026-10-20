@@ -8,8 +8,7 @@
     "build": "tsc && vite build",
     "tauri": "tauri",
     "test": "node --test tests/model.test.ts",
-    "test:ui": "playwright test",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

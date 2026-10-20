@@ -11,10 +11,11 @@ export interface Milestone {
 export interface AppData {
   version: 2;
   birthDate: string | null;
+  displayScale: "small" | "medium" | "large";
   milestones: Record<string, Milestone>;
 }
 export function emptyData(): AppData {
-  return { version: 2, birthDate: null, milestones: {} };
+  return { version: 2, birthDate: null, displayScale: "medium", milestones: {} };
 }
 
 export function parseBirthDate(value: string): Date {

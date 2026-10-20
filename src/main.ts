@@ -18,6 +18,7 @@ const titleInput = element<HTMLInputElement>("mark-title");
 const detailsInput = element<HTMLTextAreaElement>("mark-details");
 const colorInput = element<HTMLInputElement>("mark-color");
 const birthInput = element<HTMLInputElement>("birth-date");
+const scaleInput = element<HTMLSelectElement>("display-scale");
 let data = emptyData();
 let interactive = false;
 let selected: number | null = null;
@@ -48,6 +49,7 @@ function render(): void {
   element("recover-button").hidden = !loadError;
   if (message && editor.open) notice.scrollIntoView({ block: "nearest" });
   birthInput.max = localToday().toISOString().slice(0, 10);
+  scaleInput.value = data.displayScale;
 }
 function closeEditor(): void { editor.close(); selected = null; canvas.title = ""; }
 function showMode(value: boolean): void {
@@ -62,7 +64,7 @@ function showMode(value: boolean): void {
 function draft(requireTitle = false): AppData {
   const birthDate = birthInput.value || null;
   if (birthDate || data.birthDate) validateBirthday(birthDate ?? "");
-  const next = { ...data, birthDate };
+  const next = { ...data, birthDate, displayScale: scaleInput.value as AppData["displayScale"] };
   if (!editor.open || selected === null) return next;
   const title = titleInput.value.trim(), details = detailsInput.value;
   if (!title) {
@@ -73,18 +75,20 @@ function draft(requireTitle = false): AppData {
 }
 async function persist(next = draft()): Promise<void> {
   if (loadError) throw new Error("请先恢复数据，原文件不会被覆盖。");
+  const resize = next.displayScale !== data.displayScale;
   data = await invoke<AppData>("save_data", { data: next });
+  if (resize) await invoke("set_scale", { scale: data.displayScale });
 }
 async function action(task: () => void | Promise<void>): Promise<void> {
   if (busy || !ready) return;
   busy = true; error = null;
-  const buttons = document.querySelectorAll<HTMLButtonElement>("button");
-  buttons.forEach(button => { button.disabled = true; });
+  const controls = document.querySelectorAll<HTMLButtonElement | HTMLSelectElement>("button, select");
+  controls.forEach(control => { control.disabled = true; });
   try { await task(); }
   catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
   finally {
     busy = false;
-    buttons.forEach(button => { button.disabled = false; });
+    controls.forEach(control => { control.disabled = false; });
     render();
   }
 }
@@ -141,6 +145,7 @@ canvas.addEventListener("keydown", event => {
   }
 });
 onAction("birth-date", "change", () => persist());
+onAction("display-scale", "change", () => persist());
 onAction("milestone-form", "submit", async () => { await persist(draft(true)); closeEditor(); });
 onAction("close-editor", "click", async () => { await persist(); closeEditor(); });
 onAction("delete-mark", "click", async () => {
@@ -151,11 +156,12 @@ onAction("delete-mark", "click", async () => {
 onAction("recover-button", "click", async () => {
   data = await invoke<AppData>("recover_data"); loadError = null;
   birthInput.value = data.birthDate ?? "";
+  await invoke("set_scale", { scale: data.displayScale });
   if (!data.birthDate) birthInput.focus();
 });
 element("done-button").addEventListener("click", () => { void finishEditing(); });
 element("drag-handle").addEventListener("pointerdown", event => {
-  if (interactive && event.button === 0 && !(event.target as HTMLElement).closest("button, input, label")) {
+  if (interactive && event.button === 0 && !(event.target as HTMLElement).closest("button, input, select, label")) {
     void action(() => invoke("begin_drag"));
   }
 });

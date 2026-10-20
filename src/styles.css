@@ -20,11 +20,11 @@ footer { padding-left: 16px; }
 .separator { margin: 0 11px; color: #404040; }
 .footer-meta { display: flex; justify-content: space-between; gap: 8px; color: #525252; font-size: 10px; }
 .help { margin: 12px 0 0; font-size: 10px; color: #737373; }
-button, input, textarea { font: inherit; }
-button { color: #a3a3a3; background: #161616; border: 1px solid #2b2b2b; border-radius: 6px; cursor: pointer; padding: 6px 10px; }
+button, input, textarea, select { font: inherit; }
+button, select { color: #a3a3a3; background: #161616; border: 1px solid #2b2b2b; border-radius: 6px; cursor: pointer; padding: 6px 10px; }
 button:hover { color: #e5e5e5; border-color: #525252; background: #202020; }
-button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid #a3a3a3; outline-offset: 2px; }
-button:disabled { opacity: .45; cursor: wait; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 1px solid #a3a3a3; outline-offset: 2px; }
+button:disabled, select:disabled { opacity: .45; cursor: wait; }
 .accent { color: #e5e5e5; }
 kbd { color: #525252; font: 9px Consolas, monospace; margin-left: 4px; }
 dialog { color: #e5e5e5; background: #101010; border: 1px solid #333; border-radius: 10px; padding: 20px; box-shadow: 0 12px 40px #0009; max-height: calc(100dvh - 24px); overflow: auto; }
@@ -48,3 +48,4 @@ input[type=color] { width: 32px; height: 23px; border: 0; padding: 0; background
 .notice button { margin-top: 6px; font-size: 10px; }
 .week-editor .notice { position: static; margin-top: 12px; }
 @media (max-width: 520px) { .app-panel { padding: 16px 12px; gap: 12px; } .identity > span, .birth-label > span { display: none; } }
+@media (max-width: 420px) { .identity { display: none; } header > .edit-controls { margin-left: auto; } }
