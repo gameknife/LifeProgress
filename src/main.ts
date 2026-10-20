@@ -19,6 +19,7 @@ const detailsInput = element<HTMLTextAreaElement>("mark-details");
 const colorInput = element<HTMLInputElement>("mark-color");
 const birthInput = element<HTMLInputElement>("birth-date");
 const scaleInput = element<HTMLSelectElement>("display-scale");
+const tooltip = element("week-tooltip");
 let data = emptyData();
 let interactive = false;
 let selected: number | null = null;
@@ -31,9 +32,10 @@ let warning: string | null = null;
 let error: string | null = null;
 
 function render(): void {
+  tooltip.hidden = true;
   layout = drawCalendar(canvas, data, interactive, selected);
   const progress = getProgress(data.birthDate);
-  element("remaining").textContent = data.birthDate ? `${progress.remaining}w left` : "—w left";
+  element("remaining").textContent = data.birthDate ? `${progress.elapsed} / ${progress.remaining} weeks` : "— / — weeks";
   element("percent").textContent = data.birthDate ? `${progress.percent.toFixed(1)}%` : "—%";
   element("life-caption").textContent = !data.birthDate ? "Ctrl+Alt+L · 设置出生日期" :
     progress.current === null ? "90 年 · 每一周都曾属于你" : `${weekDescription(progress.current)} · ${interactive ? "编辑中" : "Ctrl+Alt+L 编辑"}`;
@@ -51,12 +53,11 @@ function render(): void {
   birthInput.max = localToday().toISOString().slice(0, 10);
   scaleInput.value = data.displayScale;
 }
-function closeEditor(): void { editor.close(); selected = null; canvas.title = ""; }
+function closeEditor(): void { editor.close(); selected = null; }
 function showMode(value: boolean): void {
   interactive = value;
   document.body.classList.toggle("interactive", value);
   canvas.tabIndex = value ? 0 : -1;
-  canvas.title = "";
   if (!value) closeEditor();
   render();
   if (value && !data.birthDate) birthInput.focus();
@@ -113,7 +114,6 @@ async function openWeek(index: number): Promise<void> {
   detailsInput.value = mark?.details ?? "";
   colorInput.value = mark?.color ?? "#FACC15";
   element("delete-mark").hidden = !mark;
-  canvas.title = "";
   if (!editor.open) editor.show();
   titleInput.focus();
 }
@@ -121,12 +121,32 @@ function pointerWeek(event: MouseEvent): number | null {
   const rect = canvas.getBoundingClientRect();
   return hitTest(event.clientX - rect.left, event.clientY - rect.top, layout);
 }
+function showTooltip(x: number, y: number): void {
+  const rect = canvas.getBoundingClientRect();
+  const index = hitTest(x - rect.left, y - rect.top, layout);
+  const mark = index === null ? undefined : data.milestones[index];
+  tooltip.hidden = editor.open || index === null || (!interactive && !mark);
+  if (tooltip.hidden || index === null) return;
+  tooltip.textContent = [weekDescription(index), weekDates(index, data.birthDate), mark?.title, mark?.details].filter(Boolean).join("\n");
+  tooltip.style.left = `${Math.max(8, Math.min(x + 12, innerWidth - tooltip.offsetWidth - 8))}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - tooltip.offsetHeight - 8))}px`;
+}
+async function pollHover(): Promise<void> {
+  try {
+    // Click-through windows receive no pointer events; only query when there are records to show.
+    if (ready && !interactive && Object.keys(data.milestones).length) {
+      const [x, y] = await invoke<[number, number]>("cursor_position");
+      if (!interactive) showTooltip(x, y);
+    }
+  } catch { tooltip.hidden = true; }
+  setTimeout(pollHover, 120);
+}
+void pollHover();
 
 canvas.addEventListener("pointermove", event => {
-  if (!interactive || editor.open || !ready) return;
-  const index = pointerWeek(event);
-  canvas.title = index === null ? "" : `${weekDescription(index)}\n${weekDates(index, data.birthDate)}\n${data.milestones[index]?.title ?? ""}`;
+  if (interactive && ready) showTooltip(event.clientX, event.clientY);
 });
+canvas.addEventListener("pointerleave", () => { tooltip.hidden = true; });
 canvas.addEventListener("click", event => {
   if (!interactive || !ready) return;
   const index = pointerWeek(event);

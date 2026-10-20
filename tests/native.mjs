@@ -55,7 +55,7 @@ if (original && JSON.parse(original).version === 1) {
 }
 await invoke('save_data', { data: { version: 2, birthDate: null, milestones: {} } });
 await page.reload();
-await expect(page.locator('#remaining')).toHaveText('—w left');
+await expect(page.locator('#remaining')).toHaveText('— / — weeks');
 await expect(page.locator('.app-panel')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 await expect(page.locator('#weeks')).toHaveAttribute('aria-label', /^52 行、90 列/);
 assert.ok(await page.evaluate(() => innerWidth > innerHeight), 'Horizontal native window should be wider than tall');
@@ -69,7 +69,7 @@ assert.deepEqual(await page.evaluate(() => ({ width: innerWidth, height: innerHe
 assert.deepEqual(windowBounds(), silentWindowBounds, 'Editing must preserve OS window bounds');
 await page.locator('#birth-date').fill('1995-05-18');
 await page.locator('#birth-date').blur();
-await expect(page.locator('#remaining')).toHaveText(/\d+w left/);
+await expect(page.locator('#remaining')).toHaveText(/^\d+ \/ \d+ weeks$/);
 
 async function clickWeek(index) {
   const rect = await page.locator('#weeks').boundingBox();
@@ -101,7 +101,7 @@ assert.equal(backup.milestones[52 * 22 + 12].title, '大学毕业');
 await page.screenshot({ path: '.qa/silent.png' });
 // Reload the actual WebView and verify Rust-backed data is restored.
 await page.reload();
-await expect(page.locator('#remaining')).toHaveText(/\d+w left/);
+await expect(page.locator('#remaining')).toHaveText(/^\d+ \/ \d+ weeks$/);
 await invoke('set_mode', { interactive: true });
 await clickWeek(52 * 40 + 20);
 await expect(page.locator('#mark-title')).toHaveValue('环球旅行计划');

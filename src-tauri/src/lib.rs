@@ -136,6 +136,17 @@ fn toggle(app: &AppHandle) {
 }
 
 #[tauri::command]
+fn cursor_position(window: tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
+    let cursor = window.cursor_position()?;
+    let origin = window.inner_position()?;
+    let dpi = window.scale_factor()?;
+    Ok((
+        (cursor.x - origin.x as f64) / dpi,
+        (cursor.y - origin.y as f64) / dpi,
+    ))
+}
+
+#[tauri::command]
 fn set_scale(window: tauri::WebviewWindow, scale: DisplayScale) -> tauri::Result<()> {
     let factor = match scale {
         DisplayScale::Small => 1.0,
@@ -184,6 +195,7 @@ pub fn run() {
             recover_data,
             set_mode,
             set_scale,
+            cursor_position,
             begin_drag,
             quit_app
         ])

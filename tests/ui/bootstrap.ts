@@ -4,8 +4,11 @@ import { emit } from "@tauri-apps/api/event";
 import { emptyData } from "../../src/model";
 
 let interactive = true;
+let pointer = [-1, -1];
+document.addEventListener("pointermove", event => { pointer = [event.clientX, event.clientY]; });
 mockIPC(async (command, args) => {
   switch (command) {
+    case "cursor_position": return pointer;
     case "load_data":
       return { data: JSON.parse(localStorage.getItem("life-progress.test") ?? "null") ?? emptyData(), interactive, loadError: null, warning: null };
     case "save_data":

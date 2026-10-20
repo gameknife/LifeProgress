@@ -14,7 +14,7 @@ async function setup(page: Page) {
   await expect(page.locator("#birth-date")).toBeVisible();
   await page.locator("#birth-date").fill("1995-05-18");
   await page.locator("#birth-date").blur();
-  await expect(page.locator("#remaining")).toHaveText(/\d+w left/);
+  await expect(page.locator("#remaining")).toHaveText(/^\d+ \/ \d+ weeks$/);
 }
 async function weekPoint(page: Page, index: number) {
   const rect = await page.locator("#weeks").boundingBox();
@@ -70,7 +70,7 @@ test("save failure keeps draft and editor available", async ({ page }) => {
   await expect(page.locator("#mark-title")).toHaveValue("不能丢失的输入");
   await expect(page.locator("body")).toHaveClass(/interactive/);
 });
-test("native tooltip is text-safe and keyboard can open nodes", async ({ page }) => {
+test("tooltip is text-safe and keyboard can open nodes", async ({ page }) => {
   await setup(page);
   await page.locator("#weeks").focus();
   await page.keyboard.press("ArrowRight");
@@ -80,8 +80,39 @@ test("native tooltip is text-safe and keyboard can open nodes", async ({ page })
   await page.getByRole("button", { name: "保存标记", exact: true }).click();
   const point = await weekPoint(page, 52);
   await page.mouse.move(point.x, point.y);
-  await expect(page.locator("#weeks")).toHaveAttribute("title", /<img src=x onerror=alert\(1\)>/);
+  await expect(page.getByRole("tooltip")).toContainText("<img src=x onerror=alert(1)>");
   await expect(page.locator("img")).toHaveCount(0);
+});
+
+test("silent hover shows records without editing or focus and hides on empty weeks", async ({ page }) => {
+  await setup(page);
+  const counts = (await page.locator("#remaining").innerText()).match(/\d+/g)!.map(Number);
+  expect(counts[0] + counts[1]).toBe(4680);
+  await expect(page.locator("#remaining")).toHaveCSS("color", "rgb(115, 115, 115)");
+  await clickWeek(page, 4679);
+  await page.locator("#mark-title").fill("最后一周");
+  await page.locator("#mark-details").fill("珍惜当下\n<em>原样显示</em>");
+  await page.keyboard.press("Escape");
+  const focus = await page.evaluate(() => document.activeElement?.id);
+  const point = await weekPoint(page, 4679);
+  await page.mouse.move(point.x, point.y);
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText("最后一周\n珍惜当下\n<em>原样显示</em>");
+  await expect(tooltip.locator("em")).toHaveCount(0);
+  await expect(tooltip).toHaveCSS("pointer-events", "none");
+  await expect(page.locator("body")).not.toHaveClass(/interactive/);
+  await expect(page.locator("#editor")).not.toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe(focus);
+  const bounds = await tooltip.boundingBox();
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(520);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(920);
+  const empty = await weekPoint(page, 0);
+  await page.mouse.move(empty.x, empty.y);
+  await expect(tooltip).not.toBeVisible();
+  await page.mouse.move(point.x, point.y);
+  await expect(tooltip).toBeVisible();
+  await wake(page);
+  await expect(tooltip).not.toBeVisible();
 });
 
 test("manual resizing preserves the same mark in the horizontal grid", async ({ page }) => {
