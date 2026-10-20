@@ -87,17 +87,24 @@ test("tooltip is text-safe and keyboard can open nodes", async ({ page }) => {
 test("silent hover shows records without editing or focus and hides on empty weeks", async ({ page }) => {
   await setup(page);
   const counts = (await page.locator("#remaining").innerText()).match(/\d+/g)!.map(Number);
-  expect(counts[0] + counts[1]).toBe(4680);
+  expect(counts[1]).toBe(4680);
   await expect(page.locator("#remaining")).toHaveCSS("color", "rgb(115, 115, 115)");
   await clickWeek(page, 4679);
   await page.locator("#mark-title").fill("最后一周");
   await page.locator("#mark-details").fill("珍惜当下\n<em>原样显示</em>");
+  await page.locator("#mark-color").evaluate((input: HTMLInputElement) => { input.value = "#38bdf8"; });
   await page.keyboard.press("Escape");
   const focus = await page.evaluate(() => document.activeElement?.id);
   const point = await weekPoint(page, 4679);
   await page.mouse.move(point.x, point.y);
   const tooltip = page.getByRole("tooltip");
-  await expect(tooltip).toContainText("最后一周\n珍惜当下\n<em>原样显示</em>");
+  await expect(tooltip.locator("b")).toHaveText("89 岁 · 第 52 周");
+  await expect(tooltip.locator("small")).toHaveText(/\d{4}-\d{2}-\d{2} — \d{4}-\d{2}-\d{2}/);
+  await expect(tooltip.locator("strong")).toHaveText("最后一周");
+  await expect(tooltip.locator("p")).toHaveText("珍惜当下\n<em>原样显示</em>");
+  await expect(tooltip).toHaveCSS("border-left-color", "rgb(56, 189, 248)");
+  await expect(page.locator("#weeks")).toHaveCSS("outline-style", "none");
+  await page.screenshot({ path: ".qa/tooltip-formatted.png" });
   await expect(tooltip.locator("em")).toHaveCount(0);
   await expect(tooltip).toHaveCSS("pointer-events", "none");
   await expect(page.locator("body")).not.toHaveClass(/interactive/);

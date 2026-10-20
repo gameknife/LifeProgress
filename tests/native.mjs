@@ -55,7 +55,7 @@ if (original && JSON.parse(original).version === 1) {
 }
 await invoke('save_data', { data: { version: 2, birthDate: null, milestones: {} } });
 await page.reload();
-await expect(page.locator('#remaining')).toHaveText('— / — weeks');
+await expect(page.locator('#remaining')).toHaveText('— / 4680 weeks');
 await expect(page.locator('.app-panel')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 await expect(page.locator('#weeks')).toHaveAttribute('aria-label', /^52 行、90 列/);
 assert.ok(await page.evaluate(() => innerWidth > innerHeight), 'Horizontal native window should be wider than tall');

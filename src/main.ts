@@ -35,7 +35,7 @@ function render(): void {
   tooltip.hidden = true;
   layout = drawCalendar(canvas, data, interactive, selected);
   const progress = getProgress(data.birthDate);
-  element("remaining").textContent = data.birthDate ? `${progress.elapsed} / ${progress.remaining} weeks` : "— / — weeks";
+  element("remaining").textContent = `${data.birthDate ? progress.elapsed : "—"} / ${TOTAL_WEEKS} weeks`;
   element("percent").textContent = data.birthDate ? `${progress.percent.toFixed(1)}%` : "—%";
   element("life-caption").textContent = !data.birthDate ? "Ctrl+Alt+L · 设置出生日期" :
     progress.current === null ? "90 年 · 每一周都曾属于你" : `${weekDescription(progress.current)} · ${interactive ? "编辑中" : "Ctrl+Alt+L 编辑"}`;
@@ -127,7 +127,9 @@ function showTooltip(x: number, y: number): void {
   const mark = index === null ? undefined : data.milestones[index];
   tooltip.hidden = editor.open || index === null || (!interactive && !mark);
   if (tooltip.hidden || index === null) return;
-  tooltip.textContent = [weekDescription(index), weekDates(index, data.birthDate), mark?.title, mark?.details].filter(Boolean).join("\n");
+  [weekDescription(index), weekDates(index, data.birthDate), mark?.title, mark?.details]
+    .forEach((text, i) => { tooltip.children[i].textContent = text ?? ""; });
+  tooltip.style.borderLeftColor = mark?.color ?? "#525252";
   tooltip.style.left = `${Math.max(8, Math.min(x + 12, innerWidth - tooltip.offsetWidth - 8))}px`;
   tooltip.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - tooltip.offsetHeight - 8))}px`;
 }
