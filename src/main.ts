@@ -2,54 +2,43 @@ import "./styles.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { drawCalendar, hitTest, type Layout } from "./calendar";
-import { emptyData, getProgress, localToday, validateBirthday, weekDates, weekDescription, TOTAL_WEEKS, WEEKS_PER_YEAR, type AppData } from "./model";
+import { localToday, weekDates, weekDescription, weeksLived, TOTAL_WEEKS, WEEKS_PER_YEAR, type AppData } from "./model";
 
-function element<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing element: ${id}`);
-  return node as T;
-}
-interface Snapshot {
-  data: AppData; interactive: boolean; loadError: string | null; warning: string | null;
-}
-const canvas = element<HTMLCanvasElement>("weeks");
-const editor = element<HTMLDialogElement>("editor");
-const titleInput = element<HTMLInputElement>("mark-title");
-const detailsInput = element<HTMLTextAreaElement>("mark-details");
-const colorInput = element<HTMLInputElement>("mark-color");
-const birthInput = element<HTMLInputElement>("birth-date");
-const scaleInput = element<HTMLSelectElement>("display-scale");
-const tooltip = element("week-tooltip");
-let data = emptyData();
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const canvas = $<HTMLCanvasElement>("weeks");
+const editor = $<HTMLDialogElement>("editor");
+const titleInput = $<HTMLInputElement>("mark-title");
+const detailsInput = $<HTMLTextAreaElement>("mark-details");
+const colorInput = $<HTMLInputElement>("mark-color");
+const birthInput = $<HTMLInputElement>("birth-date");
+const scaleInput = $<HTMLSelectElement>("display-scale");
+const tooltip = $("week-tooltip");
+const notice = $("notice");
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+let data: AppData = { birthDate: null, displayScale: "medium", milestones: {} };
 let interactive = false;
 let selected: number | null = null;
-let keyboardWeek = 0;
+let cursor = 0;
 let layout: Layout;
-let busy = false;
-let ready = false;
-let loadError: string | null = null;
-let warning: string | null = null;
-let error: string | null = null;
+let busy = true; // until the data has loaded
+let error = "";
+let day = "";
 
 function render(): void {
+  day = new Date().toDateString();
+  const lived = data.birthDate ? weeksLived(data.birthDate) : null;
+  layout = drawCalendar(canvas, data.milestones, lived, selected, interactive);
   tooltip.hidden = true;
-  layout = drawCalendar(canvas, data, interactive, selected);
-  const progress = getProgress(data.birthDate);
-  element("remaining").textContent = `${data.birthDate ? progress.elapsed : "—"} / ${TOTAL_WEEKS} weeks`;
-  element("percent").textContent = data.birthDate ? `${progress.percent.toFixed(1)}%` : "—%";
-  element("life-caption").textContent = !data.birthDate ? "Ctrl+Alt+L · 设置出生日期" :
-    progress.current === null ? "90 年 · 每一周都曾属于你" : `${weekDescription(progress.current)} · ${interactive ? "编辑中" : "Ctrl+Alt+L 编辑"}`;
-  element("mark-count").textContent = `${Object.keys(data.milestones).length} 个标记`;
-  canvas.setAttribute("aria-label", data.birthDate ?
-    `52 行、90 列的人生周历，已走过 ${progress.elapsed} 周，剩余 ${progress.remaining} 周。` :
-    "52 行、90 列的人生周历。先输入出生日期。");
-  const message = error || (loadError ? `数据未载入：${loadError}。恢复会保留损坏原件；有备份则恢复，否则重新设置。` : warning);
-  const notice = element("notice");
-  element(editor.open ? "milestone-form" : "app").append(notice);
-  notice.hidden = !interactive || !message;
-  element("notice-text").textContent = message;
-  element("recover-button").hidden = !loadError;
-  if (message && editor.open) notice.scrollIntoView({ block: "nearest" });
+  $("remaining").textContent = `${lived ?? "—"} / ${TOTAL_WEEKS} weeks`;
+  $("percent").textContent = lived === null ? "—%" : `${(lived / TOTAL_WEEKS * 100).toFixed(1)}%`;
+  $("life-caption").textContent = lived === null ? "Ctrl+Alt+L · 设置出生日期" : lived === TOTAL_WEEKS ? "90 年 · 每一周都曾属于你" :
+    `${weekDescription(lived)} · ${interactive ? "编辑中" : "Ctrl+Alt+L 编辑"}`;
+  $("mark-count").textContent = `${Object.keys(data.milestones).length} 个标记`;
+  canvas.ariaLabel = lived === null ? "52 行、90 列的人生周历。先输入出生日期。" :
+    `52 行、90 列的人生周历，已走过 ${lived} 周，剩余 ${TOTAL_WEEKS - lived} 周。`;
+  notice.textContent = error;
+  notice.hidden = !error;
   birthInput.max = localToday().toISOString().slice(0, 10);
   scaleInput.value = data.displayScale;
 }
@@ -62,159 +51,118 @@ function showMode(value: boolean): void {
   render();
   if (value && !data.birthDate) birthInput.focus();
 }
-function draft(requireTitle = false): AppData {
-  const birthDate = birthInput.value || null;
-  if (birthDate || data.birthDate) validateBirthday(birthDate ?? "");
-  const next = { ...data, birthDate, displayScale: scaleInput.value as AppData["displayScale"] };
-  if (!editor.open || selected === null) return next;
-  const title = titleInput.value.trim(), details = detailsInput.value;
-  if (!title) {
-    if (!requireTitle && !details.trim() && !data.milestones[selected]) return next;
-    throw new Error("请填写标题；移除已有记录请使用「删除标记」。");
+/** The data as the inputs show it; an untitled draft leaves marks untouched. */
+function draft(): AppData {
+  const next = { ...data, birthDate: birthInput.value || null, displayScale: scaleInput.value as AppData["displayScale"] };
+  const title = titleInput.value.trim();
+  if (editor.open && selected !== null && title) {
+    next.milestones = { ...data.milestones, [selected]: { title, details: detailsInput.value, color: colorInput.value } };
   }
-  return { ...next, milestones: { ...data.milestones, [selected]: { title, details, color: colorInput.value } } };
+  return next;
 }
-async function persist(next = draft()): Promise<void> {
-  if (loadError) throw new Error("请先恢复数据，原文件不会被覆盖。");
-  const resize = next.displayScale !== data.displayScale;
-  data = await invoke<AppData>("save_data", { data: next });
-  if (resize) await invoke("set_scale", { scale: data.displayScale });
+async function save(next = draft()): Promise<void> {
+  if (JSON.stringify(next) === JSON.stringify(data)) return;
+  await invoke("save_data", { data: next });
+  data = next;
 }
-async function action(task: () => void | Promise<void>): Promise<void> {
-  if (busy || !ready) return;
-  busy = true; error = null;
-  const controls = document.querySelectorAll<HTMLButtonElement | HTMLSelectElement>("button, select");
-  controls.forEach(control => { control.disabled = true; });
-  try { await task(); }
-  catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
-  finally {
-    busy = false;
-    controls.forEach(control => { control.disabled = false; });
-    render();
-  }
+/** One task at a time; a failure keeps every input and shows why. */
+async function act(task: () => unknown): Promise<void> {
+  if (busy) return;
+  busy = true; error = "";
+  try { await task(); } catch (cause) { error = String(cause); }
+  busy = false; render();
 }
-function onAction(id: string, event: string, task: () => void | Promise<void>): void {
-  element(id).addEventListener(event, event => { event.preventDefault(); void action(task); });
-}
-async function finishEditing(quit = false): Promise<void> {
-  await action(async () => {
-    if (!loadError || birthInput.value || editor.open) await persist();
-    await invoke("set_mode", { interactive: false });
-    if (quit) await invoke("quit_app");
-  });
+async function finish(quit = false): Promise<void> {
+  await save();
+  if (quit) await invoke("quit_app");
+  else await invoke("set_mode", { interactive: false });
 }
 async function openWeek(index: number): Promise<void> {
-  if (editor.open || birthInput.value !== (data.birthDate ?? "")) await persist();
+  await save();
   if (!data.birthDate) { birthInput.focus(); return; }
-  selected = index; keyboardWeek = index;
+  selected = cursor = index;
   const mark = data.milestones[index];
-  element("editor-heading").textContent = weekDescription(index);
-  element("editor-date").textContent = weekDates(index, data.birthDate);
+  $("editor-heading").textContent = weekDescription(index);
+  $("editor-date").textContent = weekDates(index, data.birthDate);
   titleInput.value = mark?.title ?? "";
   detailsInput.value = mark?.details ?? "";
-  colorInput.value = mark?.color ?? "#FACC15";
-  element("delete-mark").hidden = !mark;
-  if (!editor.open) editor.show();
+  colorInput.value = mark?.color ?? "#facc15";
+  $("delete-mark").hidden = !mark;
+  editor.show();
   titleInput.focus();
 }
-function pointerWeek(event: MouseEvent): number | null {
+function weekAt(x: number, y: number): number | null {
   const rect = canvas.getBoundingClientRect();
-  return hitTest(event.clientX - rect.left, event.clientY - rect.top, layout);
+  return hitTest(x - rect.left, y - rect.top, layout);
 }
 function showTooltip(x: number, y: number): void {
-  const rect = canvas.getBoundingClientRect();
-  const index = hitTest(x - rect.left, y - rect.top, layout);
-  const mark = index === null ? undefined : data.milestones[index];
-  tooltip.hidden = editor.open || index === null || (!interactive && !mark);
-  if (tooltip.hidden || index === null) return;
-  [weekDescription(index), weekDates(index, data.birthDate), mark?.title, mark?.details]
-    .forEach((text, i) => { tooltip.children[i].textContent = text ?? ""; });
+  const index = weekAt(x, y), mark = index === null ? undefined : data.milestones[index];
+  tooltip.hidden = index === null || editor.open || !(interactive || mark);
+  if (index === null || tooltip.hidden) return;
+  const dates = data.birthDate ? weekDates(index, data.birthDate) : "先设置出生日期";
+  [weekDescription(index), dates, mark?.title, mark?.details].forEach((text, i) => { tooltip.children[i].textContent = text ?? ""; });
   tooltip.style.borderLeftColor = mark?.color ?? "#525252";
-  tooltip.style.left = `${Math.max(8, Math.min(x + 12, innerWidth - tooltip.offsetWidth - 8))}px`;
-  tooltip.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - tooltip.offsetHeight - 8))}px`;
+  tooltip.style.left = `${clamp(x + 12, 8, innerWidth - tooltip.offsetWidth - 8)}px`;
+  tooltip.style.top = `${clamp(y + 12, 8, innerHeight - tooltip.offsetHeight - 8)}px`;
 }
-async function pollHover(): Promise<void> {
-  try {
-    // Click-through windows receive no pointer events; only query when there are records to show.
-    if (ready && !interactive && Object.keys(data.milestones).length) {
-      const [x, y] = await invoke<[number, number]>("cursor_position");
-      if (!interactive) showTooltip(x, y);
-    }
-  } catch { tooltip.hidden = true; }
-  setTimeout(pollHover, 120);
+function on(id: string, type: string, task: () => unknown): void {
+  $(id).addEventListener(type, event => { event.preventDefault(); void act(task); });
 }
-void pollHover();
 
-canvas.addEventListener("pointermove", event => {
-  if (interactive && ready) showTooltip(event.clientX, event.clientY);
-});
+// Click-through windows get no pointer events, so silent mode polls the cursor while there are records to show.
+setInterval(async () => {
+  if (interactive || !Object.keys(data.milestones).length) return;
+  const [x, y] = await invoke<[number, number]>("cursor_position");
+  if (!interactive) showTooltip(x, y);
+}, 120);
+canvas.addEventListener("pointermove", event => { if (interactive) showTooltip(event.clientX, event.clientY); });
 canvas.addEventListener("pointerleave", () => { tooltip.hidden = true; });
 canvas.addEventListener("click", event => {
-  if (!interactive || !ready) return;
-  const index = pointerWeek(event);
-  if (index === null) { if (editor.open) void finishEditing(); return; }
-  void action(() => openWeek(index));
+  const index = weekAt(event.clientX, event.clientY);
+  if (interactive && index !== null) void act(() => openWeek(index));
 });
+const steps: Record<string, number> = { ArrowLeft: -WEEKS_PER_YEAR, ArrowRight: WEEKS_PER_YEAR, ArrowUp: -1, ArrowDown: 1 };
 canvas.addEventListener("keydown", event => {
   if (!interactive || editor.open) return;
-  const steps: Record<string, number> = { ArrowLeft: -WEEKS_PER_YEAR, ArrowRight: WEEKS_PER_YEAR, ArrowUp: -1, ArrowDown: 1 };
   if (event.key in steps) {
     event.preventDefault();
-    keyboardWeek = Math.max(0, Math.min(TOTAL_WEEKS - 1, keyboardWeek + steps[event.key]));
-    selected = keyboardWeek; render();
+    selected = cursor = clamp(cursor + steps[event.key], 0, TOTAL_WEEKS - 1);
+    render();
   } else if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault(); void action(() => openWeek(keyboardWeek));
+    event.preventDefault();
+    void act(() => openWeek(cursor));
   }
 });
-onAction("birth-date", "change", () => persist());
-onAction("display-scale", "change", () => persist());
-onAction("milestone-form", "submit", async () => { await persist(draft(true)); closeEditor(); });
-onAction("close-editor", "click", async () => { await persist(); closeEditor(); });
-onAction("delete-mark", "click", async () => {
-  if (selected === null) return;
-  const milestones = { ...data.milestones }; delete milestones[selected];
-  await persist({ ...data, milestones }); closeEditor();
+on("birth-date", "change", () => save());
+on("display-scale", "change", async () => { await save(); await invoke("set_scale", { scale: data.displayScale }); });
+on("milestone-form", "submit", async () => { await save(); closeEditor(); });
+on("close-editor", "click", async () => { await save(); closeEditor(); });
+on("delete-mark", "click", async () => {
+  const milestones = { ...data.milestones };
+  delete milestones[selected!];
+  await save({ ...data, milestones }); closeEditor();
 });
-onAction("recover-button", "click", async () => {
-  data = await invoke<AppData>("recover_data"); loadError = null;
-  birthInput.value = data.birthDate ?? "";
-  await invoke("set_scale", { scale: data.displayScale });
-  if (!data.birthDate) birthInput.focus();
+on("done-button", "click", finish);
+$("drag-handle").addEventListener("pointerdown", event => {
+  if (interactive && event.button === 0 && !(event.target as Element).closest(".edit-controls")) void invoke("begin_drag");
 });
-element("done-button").addEventListener("click", () => { void finishEditing(); });
-element("drag-handle").addEventListener("pointerdown", event => {
-  if (interactive && event.button === 0 && !(event.target as HTMLElement).closest("button, input, select, label")) {
-    void action(() => invoke("begin_drag"));
-  }
-});
-document.addEventListener("pointerdown", event => {
-  if (!interactive || !editor.open || !ready) return;
-  const target = event.target as HTMLElement;
-  if (!editor.contains(target) && !target.closest("canvas, button, header")) void finishEditing();
+// Pressing anywhere but the editor, the header, the notice or a week saves and returns to silent mode.
+document.addEventListener("pointerdown", ({ target, clientX, clientY }) => {
+  if (editor.open && !(target as Element).closest("dialog, header, .notice") && weekAt(clientX, clientY) === null) void act(finish);
 });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && interactive) { event.preventDefault(); void finishEditing(); }
+  if (event.key === "Escape" && interactive) { event.preventDefault(); void act(finish); }
 });
-editor.addEventListener("cancel", event => { event.preventDefault(); void finishEditing(); });
-document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
 new ResizeObserver(render).observe(canvas);
-function watchDpr(): void {
-  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
-    .addEventListener("change", () => { render(); watchDpr(); }, { once: true });
-}
-watchDpr();
-function scheduleDateRefresh(): void {
-  const now = new Date();
-  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-  setTimeout(() => { render(); scheduleDateRefresh(); }, next - now.getTime() + 1000);
-}
-scheduleDateRefresh();
-async function boot(): Promise<void> {
-  await listen<boolean>("mode-changed", event => showMode(event.payload));
-  await listen<boolean>("finish-editing", event => { void finishEditing(event.payload); });
-  const snapshot = await invoke<Snapshot>("load_data");
-  data = snapshot.data; loadError = snapshot.loadError; warning = snapshot.warning;
-  birthInput.value = data.birthDate ?? "";
-  ready = true; showMode(snapshot.interactive);
-}
-void boot().catch(cause => { ready = true; loadError = String(cause); showMode(true); });
+setInterval(() => { if (day !== new Date().toDateString()) render(); }, 60_000);
+(function watchDpr(): void {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener("change", () => { render(); watchDpr(); }, { once: true });
+})();
+
+await listen<boolean>("mode-changed", event => showMode(event.payload));
+await listen<boolean>("finish-editing", event => void act(() => finish(event.payload)));
+const [loaded, mode] = await invoke<[AppData, boolean]>("load_data");
+data = loaded;
+birthInput.value = data.birthDate ?? "";
+busy = false;
+showMode(mode);

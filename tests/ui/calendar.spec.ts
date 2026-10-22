@@ -164,9 +164,11 @@ test("switching weeks saves drafts and clearing a title never deletes a mark", a
   await clickWeek(page, 0);
   await expect(page.locator("#mark-title")).toHaveValue("第一周");
   await page.locator("#mark-title").fill("");
+  await page.getByRole("button", { name: "保存标记", exact: true }).click();
+  await expect(page.locator("#editor")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.locator("#notice")).toContainText("请填写标题");
-  await expect(page.locator("body")).toHaveClass(/interactive/);
+  await expect(page.locator("body")).not.toHaveClass(/interactive/);
+  await expect(page.locator("#mark-count")).toHaveText("1 个标记");
   await page.reload();
   await clickWeek(page, 0);
   await expect(page.locator("#mark-title")).toHaveValue("第一周");
@@ -205,20 +207,6 @@ test("a failed deletion keeps the mark and editor", async ({ page }) => {
   await page.reload();
   await clickWeek(page, 0);
   await expect(page.locator("#mark-title")).toHaveValue("保留这条标记");
-});
-
-test("an invalid birthday stays editable and cannot be hidden behind the editor", async ({ page }) => {
-  await setup(page);
-  await page.locator("#birth-date").fill("2999-01-01");
-  await page.locator("#birth-date").blur();
-  await expect(page.locator("#notice")).toContainText("出生日期不能晚于今天");
-  const point = await weekPoint(page, 0);
-  await page.mouse.click(point.x, point.y);
-  await expect(page.locator("#editor")).not.toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.locator("body")).toHaveClass(/interactive/);
-  await page.reload();
-  await expect(page.locator("#birth-date")).toHaveValue("1995-05-18");
 });
 
 test("the editor and save error fit the minimum window size", async ({ page }) => {

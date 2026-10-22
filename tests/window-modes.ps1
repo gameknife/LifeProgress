@@ -9,6 +9,9 @@ public static class LifeProgressWindowQA {
     [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extraInfo);
 }
 '@
@@ -39,13 +42,36 @@ function Wait-TaskMode([bool] $interactive) {
     }
     throw "Mode did not change. Interactive=$interactive style=$taskStyle"
 }
+function Wait-TaskEditingWindow {
+    for ($taskAttempt = 0; $taskAttempt -lt 60; $taskAttempt++) {
+        $taskStyle = Get-TaskStyle
+        if (($taskStyle -band 0x20) -eq 0 -and ($taskStyle -band 0x8) -ne 0 -and
+            [LifeProgressWindowQA]::IsWindowVisible($taskWindow) -and
+            ![LifeProgressWindowQA]::IsIconic($taskWindow) -and
+            [LifeProgressWindowQA]::GetForegroundWindow() -eq $taskWindow) { return $taskStyle }
+        Start-Sleep -Milliseconds 50
+    }
+    throw 'Global hotkey failed to restore and focus the editing window'
+}
 $taskSilentStyle = Wait-TaskMode $false
 $taskBounds = Get-TaskBounds
 Send-TaskHotkey
-$taskEditStyle = Wait-TaskMode $true
-Start-Sleep -Milliseconds 200
-$taskForeground = [LifeProgressWindowQA]::GetForegroundWindow() -eq $taskWindow
-if (!$taskForeground) { throw 'Global hotkey failed to focus the editing window' }
+$taskEditStyle = Wait-TaskEditingWindow
+# Restoring must work even while the runtime still considers the window editable.
+[LifeProgressWindowQA]::ShowWindow($taskWindow, 6) | Out-Null
+if (![LifeProgressWindowQA]::IsIconic($taskWindow)) { throw 'Failed to minimize the test window' }
+Send-TaskHotkey
+$null = Wait-TaskEditingWindow
+[LifeProgressWindowQA]::ShowWindow($taskWindow, 0) | Out-Null
+if ([LifeProgressWindowQA]::IsWindowVisible($taskWindow)) { throw 'Failed to hide the test window' }
+Send-TaskHotkey
+$null = Wait-TaskEditingWindow
+if ($taskPreviousForeground -ne [IntPtr]::Zero -and $taskPreviousForeground -ne $taskWindow) {
+    [LifeProgressWindowQA]::SetForegroundWindow($taskPreviousForeground) | Out-Null
+    if ([LifeProgressWindowQA]::GetForegroundWindow() -eq $taskWindow) { throw 'Failed to unfocus the test window' }
+    Send-TaskHotkey
+    $null = Wait-TaskEditingWindow
+}
 Send-TaskHotkey
 $taskFinalStyle = Wait-TaskMode $false
 if ((Get-TaskBounds) -ne $taskBounds) { throw 'Mode transition changed window bounds' }
@@ -54,7 +80,8 @@ if ((Get-TaskBounds) -ne $taskBounds) { throw 'Mode transition changed window bo
     SilentExtendedStyle = ('0x{0:X}' -f $taskSilentStyle)
     EditingExtendedStyle = ('0x{0:X}' -f $taskEditStyle)
     ReturnedSilentStyle = ('0x{0:X}' -f $taskFinalStyle)
-    GlobalHotkeyFocusedWindow = $taskForeground
+    GlobalHotkeyFocusedWindow = $true
+    HiddenAndMinimizedRecoveryPassed = $true
     ClickThroughAndTopmostTransitionsPassed = $true
     WindowBoundsUnchanged = $true
 } | ConvertTo-Json

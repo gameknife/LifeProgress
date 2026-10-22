@@ -17,7 +17,7 @@
           <button id="done-button" class="accent" title="保存并返回静默 · ESC">完成 <kbd>esc</kbd></button>
         </div>
       </header>
-      <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="recover-button" type="button" hidden>恢复数据</button></div>
+      <p id="notice" class="notice" role="alert" hidden></p>
       <div class="calendar"><canvas id="weeks" tabindex="0" role="img" aria-label="52 行、90 列的人生周历"></canvas></div>
       <footer>
         <p class="progress"><span id="remaining">— / 4680 weeks</span><span class="separator">·</span><span id="percent">—%</span></p>
@@ -30,9 +30,9 @@
       <form id="milestone-form">
         <div class="dialog-heading"><h2 id="editor-heading"></h2><button id="close-editor" type="button" class="icon-button" aria-label="保存并关闭编辑">×</button></div>
         <p id="editor-date" class="muted"></p>
-        <label>标题<input id="mark-title" name="title" maxlength="120" placeholder="大学毕业、第一次远行…" autocomplete="off" /></label>
+        <label>标题<input id="mark-title" name="title" maxlength="120" required placeholder="大学毕业、第一次远行…" autocomplete="off" /></label>
         <label>备忘<textarea id="mark-details" name="details" maxlength="4000" rows="3" placeholder="记下此刻，或期待未来。"></textarea></label>
-        <label>节点颜色<input id="mark-color" type="color" value="#FACC15" /></label>
+        <label>节点颜色<input id="mark-color" type="color" value="#facc15" /></label>
         <div class="dialog-actions"><button id="delete-mark" type="button" class="danger" hidden>删除标记</button><button type="submit" class="primary">保存标记</button></div>
       </form>
     </dialog>

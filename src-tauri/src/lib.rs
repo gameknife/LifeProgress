@@ -1,142 +1,86 @@
 mod data;
+
 use data::{AppData, DisplayScale};
-use serde::Serialize;
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering::Relaxed},
+};
 use tauri::{
     menu::MenuBuilder,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Runtime {
-    data: AppData,
-    load_error: Option<String>,
-    warning: Option<String>,
-    interactive: bool,
-}
 struct AppState {
     path: PathBuf,
-    runtime: Mutex<Runtime>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Snapshot {
-    #[serde(flatten)]
-    runtime: Runtime,
-    data_path: String,
+    interactive: AtomicBool,
 }
 
 #[tauri::command]
-fn load_data(state: State<AppState>) -> Result<Snapshot, String> {
-    let runtime = state.runtime.lock().map_err(|e| e.to_string())?;
-    Ok(Snapshot {
-        runtime: runtime.clone(),
-        data_path: state.path.display().to_string(),
-    })
+fn load_data(state: State<AppState>) -> (AppData, bool) {
+    (data::read(&state.path), state.interactive.load(Relaxed))
 }
 
 #[tauri::command]
-fn save_data(state: State<AppState>, data: AppData) -> Result<AppData, String> {
-    let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
-    if runtime.load_error.is_some() {
-        return Err("原数据无法读取，请先使用恢复按钮；不会覆盖原文件。".into());
-    }
-    data::write_data(&state.path, &data)?;
-    runtime.data = data.clone();
-    Ok(data)
+fn save_data(state: State<AppState>, data: AppData) -> tauri::Result<()> {
+    Ok(data::write(&state.path, &data)?)
 }
 
 #[tauri::command]
-fn recover_data(state: State<AppState>) -> Result<AppData, String> {
-    let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
-    if runtime.load_error.is_none() {
-        return Ok(runtime.data.clone());
+fn set_mode(app: AppHandle, interactive: bool) -> tauri::Result<()> {
+    let window = main_window(&app);
+    if interactive {
+        #[cfg(target_os = "macos")]
+        app.show()?;
+        window.set_always_on_bottom(false)?;
+        window.set_ignore_cursor_events(false)?;
+        window.unminimize()?;
+        window.show()?;
+        // ShowWindow / restore can reset z-order during a hidden first launch.
+        window.set_always_on_top(true)?;
+        window.set_focus()?;
+    } else {
+        // Release the foreground before enabling click-through.
+        window.set_always_on_top(false)?;
+        window.set_always_on_bottom(true)?;
+        window.set_ignore_cursor_events(true)?;
+        window.show()?;
     }
-    let backup = state.path.with_extension("json.bak");
-    // Preserve the unreadable file before trying any recovery.
-    let suffix = chrono::Local::now().format("%Y%m%d-%H%M%S-%f");
-    if state.path.exists() {
-        std::fs::rename(
-            &state.path,
-            state.path.with_extension(format!("json.corrupt-{suffix}")),
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    let recovered = data::read_data(&backup).unwrap_or_default();
-    data::write_data(&state.path, &recovered)?;
-    runtime.data = recovered.clone();
-    runtime.load_error = None;
-    Ok(recovered)
-}
-
-#[tauri::command]
-fn set_mode(app: AppHandle, interactive: bool) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or("找不到主窗口")?;
-    let state = app.state::<AppState>();
-    let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
-    let transition = (|| -> tauri::Result<()> {
-        if interactive {
-            window.set_always_on_bottom(false)?;
-            window.set_ignore_cursor_events(false)?;
-            window.show()?;
-            window.unminimize()?;
-            window.set_focus()?;
-            // ShowWindow / restore can reset z-order during a hidden first launch.
-            window.set_always_on_top(true)?;
-        } else {
-            // Release the foreground before enabling click-through.
-            window.set_always_on_top(false)?;
-            window.set_always_on_bottom(true)?;
-            window.set_ignore_cursor_events(true)?;
-            window.show()?;
-        }
-        Ok(())
-    })();
-    if let Err(error) = transition {
-        // An OS failure must not leave a click-through foreground window.
-        let _ = window.set_ignore_cursor_events(false);
-        let _ = window.set_always_on_bottom(false);
-        let _ = window.set_always_on_top(true);
-        runtime.interactive = true;
-        let _ = app.emit("mode-changed", true);
-        return Err(format!("无法切换窗口模式：{error}"));
-    }
-    runtime.interactive = interactive;
-    app.emit("mode-changed", interactive)
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn is_interactive(app: &AppHandle) -> bool {
     app.state::<AppState>()
-        .runtime
-        .lock()
-        .map(|r| r.interactive)
-        .unwrap_or(true)
-}
-
-fn request_finish(app: &AppHandle, quit: bool) {
-    if quit && !is_interactive(app) {
-        app.exit(0);
-    } else if let Err(error) = app.emit("finish-editing", quit) {
-        eprintln!("{error}");
-    }
-}
-
-fn toggle(app: &AppHandle) {
-    if is_interactive(app) {
-        request_finish(app, false);
-    } else if let Err(error) = set_mode(app.clone(), true) {
-        eprintln!("{error}");
-    }
+        .interactive
+        .store(interactive, Relaxed);
+    app.emit("mode-changed", interactive)
 }
 
 #[tauri::command]
-fn cursor_position(window: tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
+fn set_scale(window: WebviewWindow, scale: DisplayScale) -> tauri::Result<()> {
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let (width, height) = (area.size.width as f64, area.size.height as f64);
+    let factor = match scale {
+        DisplayScale::Small => 1.0,
+        DisplayScale::Medium => 1.25,
+        DisplayScale::Large => 1.5,
+    };
+    // Shrink by the large preset's fit so all three stay distinct on smaller screens.
+    let unit = ((width - 48.0) / 1380.0)
+        .min((height - 48.0) / 960.0)
+        .min(monitor.scale_factor())
+        * factor;
+    let size = PhysicalSize::new(920.0 * unit, 640.0 * unit);
+    window.set_size(size)?;
+    // Center from the target size: macOS applies the resize asynchronously.
+    window.set_position(PhysicalPosition::new(
+        area.position.x as f64 + (width - size.width) / 2.0,
+        area.position.y as f64 + (height - size.height) / 2.0,
+    ))
+}
+
+#[tauri::command]
+fn cursor_position(window: WebviewWindow) -> tauri::Result<(f64, f64)> {
     let cursor = window.cursor_position()?;
     let origin = window.inner_position()?;
     let dpi = window.scale_factor()?;
@@ -147,33 +91,8 @@ fn cursor_position(window: tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
 }
 
 #[tauri::command]
-fn set_scale(window: tauri::WebviewWindow, scale: DisplayScale) -> tauri::Result<()> {
-    let factor = match scale {
-        DisplayScale::Small => 1.0,
-        DisplayScale::Medium => 1.25,
-        DisplayScale::Large => 1.5,
-    };
-    let dpi = window.scale_factor()?;
-    // Fit the largest preset first so all three stay distinct on smaller screens.
-    let fit = window.current_monitor()?.map_or(1.0, |monitor| {
-        let area = monitor.work_area().size;
-        ((area.width.saturating_sub(48) as f64) / (1380.0 * dpi))
-            .min((area.height.saturating_sub(48) as f64) / (960.0 * dpi))
-            .min(1.0)
-    });
-    window.set_size(tauri::LogicalSize::new(
-        920.0 * fit * factor,
-        640.0 * fit * factor,
-    ))?;
-    window.center()
-}
-
-#[tauri::command]
-fn begin_drag(window: tauri::WebviewWindow, state: State<AppState>) -> Result<(), String> {
-    if state.runtime.lock().map_err(|e| e.to_string())?.interactive {
-        window.start_dragging().map_err(|e| e.to_string())?;
-    }
-    Ok(())
+fn begin_drag(window: WebviewWindow) -> tauri::Result<()> {
+    window.start_dragging()
 }
 
 #[tauri::command]
@@ -181,18 +100,47 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+fn main_window(app: &AppHandle) -> WebviewWindow {
+    app.get_webview_window("main").unwrap()
+}
+
+fn is_interactive(app: &AppHandle) -> bool {
+    app.state::<AppState>().interactive.load(Relaxed)
+}
+
+fn edit(app: &AppHandle) {
+    let _ = set_mode(app.clone(), true);
+}
+
+/// The WebView saves its draft before leaving; a silent window has nothing to save.
+fn finish(app: &AppHandle, quit: bool) {
+    if quit && !is_interactive(app) {
+        app.exit(0);
+    } else {
+        let _ = app.emit("finish-editing", quit);
+    }
+}
+
+/// The hotkey closes the editor only when it is in front; otherwise it brings the editor back.
+fn toggle(app: &AppHandle) {
+    let window = main_window(app);
+    let in_front = window.is_visible().unwrap_or(false)
+        && window.is_focused().unwrap_or(false)
+        && !window.is_minimized().unwrap_or(true);
+    if in_front && is_interactive(app) {
+        finish(app, false);
+    } else {
+        edit(app);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Err(error) = set_mode(app.clone(), true) {
-                eprintln!("{error}");
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| edit(app)))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_data,
             save_data,
-            recover_data,
             set_mode,
             set_scale,
             cursor_position,
@@ -200,74 +148,60 @@ pub fn run() {
             quit_app
         ])
         .setup(|app| {
-            let directory = app.path().app_data_dir()?;
-            // Native integration tests use an isolated directory; release builds always use app data.
-            #[cfg(debug_assertions)]
-            let directory = std::env::var_os("LIFE_PROGRESS_DATA_DIR")
-                .map(PathBuf::from)
-                .unwrap_or(directory);
-            let path = directory.join("milestones.json");
-            let (data, load_error) = match data::read_data(&path) {
-                Ok(data) => (data, None),
-                Err(error) => (AppData::default(), Some(error)),
+            // Native QA may isolate its data in debug builds; release builds always use app data.
+            let dir = match std::env::var_os("LIFE_PROGRESS_DATA_DIR") {
+                Some(dir) if cfg!(debug_assertions) => PathBuf::from(dir),
+                _ => app.path().app_data_dir()?,
             };
-            set_scale(
-                app.get_webview_window("main").ok_or("找不到主窗口")?,
-                data.display_scale,
-            )?;
+            let path = dir.join("milestones.json");
+            set_scale(main_window(app.handle()), data::read(&path).display_scale)?;
             app.manage(AppState {
                 path,
-                runtime: Mutex::new(Runtime {
-                    data,
-                    load_error,
-                    warning: None,
-                    interactive: false,
-                }),
+                interactive: AtomicBool::new(false),
             });
-            let menu = MenuBuilder::new(app).text("quit", "保存并退出").build()?;
-            TrayIconBuilder::with_id("life-progress")
-                .icon(app.default_window_icon().ok_or("缺少应用图标")?.clone())
-                .tooltip("Life Progress · Ctrl+Alt+L 编辑")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_tray_icon_event(|tray, event| {
-                    if matches!(
-                        event,
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        }
-                    ) {
-                        toggle(tray.app_handle());
-                    }
-                })
-                .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "quit" {
-                        request_finish(app, true);
-                    }
-                })
-                .build(app)?;
-            if let Err(error) = app
+            let hotkey = app
                 .global_shortcut()
                 .on_shortcut("Ctrl+Alt+L", |app, _, event| {
                     if event.state == ShortcutState::Pressed {
                         let handle = app.clone();
                         let _ = app.run_on_main_thread(move || toggle(&handle));
                     }
+                });
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                // A taken hotkey is not fatal: the tray always reaches the editor.
+                .tooltip(match hotkey {
+                    Ok(_) => "Life Progress · Ctrl+Alt+L 编辑",
+                    Err(_) => "Life Progress · 点击编辑",
                 })
-            {
-                app.state::<AppState>().runtime.lock().unwrap().warning = Some(format!(
-                    "Ctrl+Alt+L 注册失败：{error}。请通过托盘进入编辑。"
-                ));
-            }
-            set_mode(app.handle().clone(), false)?;
-            Ok(())
+                .menu(
+                    &MenuBuilder::new(app)
+                        .text("edit", "显示并编辑")
+                        .text("quit", "保存并退出")
+                        .build()?,
+                )
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        edit(tray.app_handle());
+                    }
+                })
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => finish(app, true),
+                    _ => edit(app),
+                })
+                .build(app)?;
+            Ok(set_mode(app.handle().clone(), false)?)
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                request_finish(window.app_handle(), false);
+                finish(window.app_handle(), false);
             }
         })
         .run(tauri::generate_context!())

@@ -23,7 +23,6 @@ button, input, textarea, select { font: inherit; }
 button, select { color: #a3a3a3; background: #161616; border: 1px solid #2b2b2b; border-radius: 6px; cursor: pointer; padding: 6px 10px; }
 button:hover { color: #e5e5e5; border-color: #525252; background: #202020; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 1px solid #a3a3a3; outline-offset: 2px; }
-button:disabled, select:disabled { opacity: .45; cursor: wait; }
 .accent { color: #e5e5e5; }
 kbd { color: #525252; font: 9px Consolas, monospace; margin-left: 4px; }
 dialog { color: #e5e5e5; background: #101010; border: 1px solid #333; border-radius: 10px; padding: 20px; box-shadow: 0 12px 40px #0009; max-height: calc(100dvh - 24px); overflow: auto; }
@@ -43,9 +42,7 @@ input[type=color] { width: 32px; height: 23px; border: 0; padding: 0; background
 .primary { background: #e5e5e5; color: #171717; border-color: #e5e5e5; padding: 7px 13px; }
 .primary:hover { background: #fff; color: #000; border-color: #fff; }
 .danger { color: #ef7777; margin-right: auto; background: transparent; border-color: transparent; }
-.notice { position: fixed; top: 75px; left: 22px; right: 22px; z-index: 5; background: #101010; padding: 8px; border: 1px solid #743333; border-radius: 5px; font-size: 10px; color: #fca5a5; line-height: 1.6; }
-.notice button { margin-top: 6px; font-size: 10px; }
-.week-editor .notice { position: static; margin-top: 12px; }
+.notice { position: fixed; top: 75px; left: 22px; right: 22px; z-index: 15; margin: 0; background: #101010; padding: 8px; border: 1px solid #743333; border-radius: 5px; font-size: 10px; color: #fca5a5; line-height: 1.6; }
 #week-tooltip { position: fixed; z-index: 20; pointer-events: none; width: max-content; max-width: min(320px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px 16px; border: 1px solid #303030; border-left: 3px solid; border-radius: 8px; background: #141414; color: #a3a3a3; font-size: 12px; line-height: 1.7; box-shadow: 0 6px 24px #0006; }
 #week-tooltip > * { display: block; margin: 0; }
 #week-tooltip > :empty { display: none; }
